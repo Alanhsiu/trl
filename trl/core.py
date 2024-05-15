@@ -226,7 +226,7 @@ def stats_to_np(stats_dict: Dict) -> Dict:
 
 
 def respond_to_batch(
-    model: nn.Module, queries: List[torch.LongTensor], txt_len: int = 20, top_k: int = 0, top_p: float = 1.0
+    model: nn.Module, queries: List[torch.LongTensor], txt_len: int = 100, top_k: int = 0, top_p: float = 1.0
 ) -> torch.LongTensor:
     """Sample text from language model."""
     input_ids = queries
@@ -239,6 +239,10 @@ def respond_to_batch(
         probs = F.softmax(next_token_logits, dim=-1)
         next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
         input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
+        
+        # Add EOS token (0515)
+        # if next_token.item() == 2:
+        #     break
     return input_ids[:, -txt_len:]
 
 

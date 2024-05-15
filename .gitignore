@@ -147,3 +147,12 @@ wandb/
 
 # cli scripts that are symlinked from `examples/scripts`
 trl/commands/scripts/
+
+# Added by Alan
+NISQA/
+data-encodec/
+logs/
+output/
+temp.txt
+tokenizer/
+vc/
