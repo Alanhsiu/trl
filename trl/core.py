@@ -224,25 +224,43 @@ def stats_to_np(stats_dict: Dict) -> Dict:
             new_dict[k] = float(new_dict[k])
     return new_dict
 
-
 def respond_to_batch(
     model: nn.Module, queries: List[torch.LongTensor], txt_len: int = 100, top_k: int = 0, top_p: float = 1.0
 ) -> torch.LongTensor:
     """Sample text from language model."""
     input_ids = queries
+    # bad_words_ids = [[ar_tokenizer.convert_tokens_to_ids(f"v_tok_{i}")] for i in range(1024, 1024*8)]
+    # # append 0 to 50264 to bad words ids
+    # vocab_ids = [[i] for i in range(0, 50265)]
+    # bad_words_ids.extend(vocab_ids)
+    # # 50265 to 59480 is the range of good words
+    # decode_ar = ar_model.generate(**inputs, max_length=1024, num_beams=1,
+    #                                 do_sample=True, use_cache=True, bad_words_ids=bad_words_ids)
     for _i in range(txt_len):
         # Get Logits
         outputs = model(input_ids)
         next_token_logits = outputs[0][:, -1, :]
+        print("outputs: ", outputs[0].shape)
+        print("next_token_logits: ", next_token_logits.shape)
+        # print("outputs: ", outputs)
+        # print("next_token_logits: ", next_token_logits)
+        
+        # Filter the bad words
+        # next_token_logits[:, :50265] = -float("Inf")
+        next_token_logits[:, 4:50264] = -float("Inf")
+            
+        # print("after next_token_logits: ", next_token_logits)
+        
         next_token_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
         # Sample
         probs = F.softmax(next_token_logits, dim=-1)
         next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
+        print("i: ", _i, "next_token: ", next_token)
+        if (next_token == 2).any():
+            break
         input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
         
-        # Add EOS token (0515)
-        # if next_token.item() == 2:
-        #     break
+
     return input_ids[:, -txt_len:]
 
 
