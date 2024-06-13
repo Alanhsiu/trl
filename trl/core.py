@@ -224,44 +224,290 @@ def stats_to_np(stats_dict: Dict) -> Dict:
             new_dict[k] = float(new_dict[k])
     return new_dict
 
-def respond_to_batch(
-    model: nn.Module, queries: List[torch.LongTensor], txt_len: int = 100, top_k: int = 0, top_p: float = 1.0
+import torch
+import torch.nn.functional as F
+from torch import nn
+from typing import List
+
+# def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float('Inf')):
+#     """ Filter a distribution of logits using top-k and/or nucleus (top-p) filtering """
+#     # ... your implementation here ...
+#     return logits
+
+def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float('Inf')):
+    """ Filter a distribution of logits using top-k and/or nucleus (top-p) filtering """
+    if top_k > 0:
+        top_k = min(max(top_k, 1), logits.size(-1))  # Safety check
+        indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+        logits[indices_to_remove] = filter_value
+
+    if top_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+        
+        sorted_indices_to_remove = cumulative_probs > top_p
+        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 0] = 0
+
+        indices_to_remove = sorted_indices[sorted_indices_to_remove]
+        logits[indices_to_remove] = filter_value
+
+    return logits
+
+def old_respond_to_batch(
+    model: nn.Module, queries: List[torch.LongTensor], txt_len: int = 20, top_k: int = 0, top_p: float = 1.0
 ) -> torch.LongTensor:
     """Sample text from language model."""
     input_ids = queries
-    # bad_words_ids = [[ar_tokenizer.convert_tokens_to_ids(f"v_tok_{i}")] for i in range(1024, 1024*8)]
-    # # append 0 to 50264 to bad words ids
-    # vocab_ids = [[i] for i in range(0, 50265)]
-    # bad_words_ids.extend(vocab_ids)
-    # # 50265 to 59480 is the range of good words
-    # decode_ar = ar_model.generate(**inputs, max_length=1024, num_beams=1,
-    #                                 do_sample=True, use_cache=True, bad_words_ids=bad_words_ids)
+    count = 0
+    response = []
     for _i in range(txt_len):
         # Get Logits
         outputs = model(input_ids)
         next_token_logits = outputs[0][:, -1, :]
-        print("outputs: ", outputs[0].shape)
-        print("next_token_logits: ", next_token_logits.shape)
-        # print("outputs: ", outputs)
-        # print("next_token_logits: ", next_token_logits)
-        
-        # Filter the bad words
-        # next_token_logits[:, :50265] = -float("Inf")
-        next_token_logits[:, 4:50264] = -float("Inf")
-            
-        # print("after next_token_logits: ", next_token_logits)
-        
         next_token_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
         # Sample
         probs = F.softmax(next_token_logits, dim=-1)
         next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
-        print("i: ", _i, "next_token: ", next_token)
-        if (next_token == 2).any():
+        response.append(next_token)
+        if (next_token == 2).any():  # EOS token
             break
+        count+=1
         input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
+    # return input_ids[:, -count:]
+    response = torch.stack(response).transpose(0, 1)  # convert list of tensors to a single tensor
+    return response
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import List
+
+def respond_to_batch(
+    model: nn.Module, queries: List[torch.LongTensor], txt_len: int = 100, top_k: int = 0, top_p: float = 1.0, tokenizer=None
+) -> torch.LongTensor:
+    
+    input_ids = queries
+    count = 0
+    min_steps = 5
+    response = []
+    
+    for _i in range(txt_len):
+        outputs = model(input_ids)
+        next_token_logits = outputs[0][:, -1, :]
+        if count == 0:
+            print(f"i: {_i}, next_token_logits shape: {next_token_logits.shape}, size: {next_token_logits.size()}, size(-1): {next_token_logits.size(-1)}")
+        
+        if next_token_logits.size(-1) < 50264:
+            raise RuntimeError(f"Logits dim error: {next_token_logits.size()}")
+        
+        if count < min_steps:
+            next_token_logits[:, 2] = -float("Inf")
+        next_token_logits[:, 4:50264] = -float("Inf")
+        next_token_logits[:, 51289:58457] = -float("Inf")
+        
+        # Apply top-k and top-p filtering
+        next_token_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
+        
+        # Checks for invalid values (infinity, NaN, negative values) in the logits and replaces them with a large negative number to avoid errors.
+        if torch.isinf(next_token_logits).any() or torch.isnan(next_token_logits).any() or (next_token_logits < 0).any():
+            print(f"Invalid values found in next_token_logits at step {_i}")
+            # Replace invalid values with a large negative number (e.g., -1e10) to avoid errors
+            next_token_logits = torch.where(
+                torch.isinf(next_token_logits) | torch.isnan(next_token_logits) | (next_token_logits < 0),
+                torch.tensor(-1e10).to(next_token_logits.device),
+                next_token_logits
+            )
+        
+        probs = F.softmax(next_token_logits, dim=-1)
+        next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
+
+        if (next_token >= next_token_logits.size(-1)).any() or (next_token < 0).any():
+            raise ValueError(f"Index out of range: {next_token}")
+
+        response.append(next_token)
+        print("next_token: ", next_token, " dimension: ", next_token.dim())
+        print("response: ", response)
+        
+        decoded_next_token = tokenizer.decode(next_token)
+
+        if next_token == 2:
+            print("input_ids: ", input_ids)
+            print(f"count: {count}, input_ids[:, -count:]: {input_ids[:, -count:]}, input_ids shape: {input_ids.shape}, size: {input_ids.size()}, size(1): {input_ids.size(1)}")
+            break
+        if input_ids.shape[1] >= 1024:
+            print("input_ids reached max length")
+            print("input_ids: ", input_ids)
+            print(f"count: {count}, input_ids[:, -count:]: {input_ids[:, -count:]}, input_ids shape: {input_ids.shape}, size: {input_ids.size()}, size(1): {input_ids.size(1)}")
+            break
+        
+        input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
+        count += 1
+
+    response = torch.stack(response).transpose(0, 1)  # convert list of tensors to a single tensor
+    return response
+
+
+# def respond_to_batch(
+#     model: nn.Module, queries: List[torch.LongTensor], txt_len: int = 100, top_k: int = 0, top_p: float = 1.0, tokenizer=None
+# ) -> torch.LongTensor:
+    
+#     input_ids = queries
+#     count = 0
+#     min_steps = 5
+#     response = []
+    
+#     for _i in range(txt_len):
+#         outputs = model(input_ids)
+#         next_token_logits = outputs[0][:, -1, :]
+#         if count == 0:
+#             print(f"i: {_i}, next_token_logits shape: {next_token_logits.shape}, size: {next_token_logits.size()}, size(-1): {next_token_logits.size(-1)}")
+        
+#         if next_token_logits.size(-1) < 50264:
+#             raise RuntimeError(f"Logits dim error: {next_token_logits.size()}")
+        
+#         if count < min_steps:
+#             next_token_logits[:, 2] = -float("Inf")
+#         next_token_logits[:, 4:50264] = -float("Inf")
+#         next_token_logits[:, 51289:58457] = -float("Inf")
+        
+#         # Apply top-k and top-p filtering
+#         next_token_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
+        
+#         # Checks for invalid values (infinity, NaN, negative values) in the logits and replaces them with a large negative number to avoid errors.
+#         if torch.isinf(next_token_logits).any() or torch.isnan(next_token_logits).any() or (next_token_logits < 0).any():
+#             print(f"Invalid values found in next_token_logits at step {_i}")
+#             # Replace invalid values with a large negative number (e.g., -1e10) to avoid errors
+#             next_token_logits = torch.where(
+#                 torch.isinf(next_token_logits) | torch.isnan(next_token_logits) | (next_token_logits < 0),
+#                 torch.tensor(-1e10).to(next_token_logits.device),
+#                 next_token_logits
+#             )
+        
+#         probs = F.softmax(next_token_logits, dim=-1)
+#         next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
+
+#         if (next_token >= next_token_logits.size(-1)).any() or (next_token < 0).any():
+#             raise ValueError(f"Index out of range: {next_token}")
+
+#         # input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
+#         response.append(next_token)
+#         print("next_token: ", next_token, " dimension: ", next_token.dim())
+#         print("response: ", response)
+        
+#         decoded_next_token = tokenizer.decode(next_token)
+
+#         # if input_ids[0, -1] == 2:
+#         if next_token == 2:
+#             print("input_ids: ", input_ids)
+#             print(f"count: {count}, input_ids[:, -count:]: {input_ids[:, -count:]}, input_ids shape: {input_ids.shape}, size: {input_ids.size()}, size(1): {input_ids.size(1)}")
+#             break
+#         if input_ids.shape[1] >= 1024:
+#             print("input_ids reached max length")
+#             print("input_ids: ", input_ids)
+#             print(f"count: {count}, input_ids[:, -count:]: {input_ids[:, -count:]}, input_ids shape: {input_ids.shape}, size: {input_ids.size()}, size(1): {input_ids.size(1)}")
+#             break
+        
+#         count += 1
+        
+#         print("torch.stack(response)", torch.stack(response))
+
+#     # return input_ids[:, -count:]
+#     # return torch.stack(response)
+#     return response
+
+# def respond_to_batch(
+#     model: nn.Module, queries: List[torch.LongTensor], txt_len: int = 100, top_k: int = 0, top_p: float = 1.0, tokenizer=None
+# ) -> torch.LongTensor:
+    
+#     input_ids = queries
+#     count = 0
+#     min_steps = 5
+    
+#     for _i in range(txt_len):
+#         outputs = model(input_ids)
+#         next_token_logits = outputs[0][:, -1, :]
+#         if count == 0:
+#             print(f"i: {_i}, next_token_logits shape: {next_token_logits.shape}, size: {next_token_logits.size()}, size(-1): {next_token_logits.size(-1)}")
+        
+#         if next_token_logits.size(-1) < 50264:
+#             raise RuntimeError(f"Logits dim error: {next_token_logits.size()}")
+        
+#         # if count < min_steps:
+#         #     next_token_logits[:, 2] = -float("Inf")
+#         next_token_logits[:, 4:50264] = -float("Inf")
+#         next_token_logits[:, 51289:58457] = -float("Inf")
+#         next_token_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
+
+#         if torch.isinf(next_token_logits).any() or torch.isnan(next_token_logits).any() or (next_token_logits < 0).any():
+#             print(f"Invalid values found in next_token_logits at step {_i}")
+#             # Replace invalid values with a large negative number (e.g., -1e10) to avoid errors
+#             next_token_logits = torch.where(
+#                 torch.isinf(next_token_logits) | torch.isnan(next_token_logits) | (next_token_logits < 0),
+#                 torch.tensor(-1e10).to(next_token_logits.device),
+#                 next_token_logits
+#             )
+
+#         probs = F.softmax(next_token_logits, dim=-1)
+#         next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
+
+#         if (next_token >= next_token_logits.size(-1)).any() or (next_token < 0).any():
+#             raise ValueError(f"Index out of range: {next_token}")
+
+#         # if (next_token == 2).any():  # EOS token
+#         #     break
+        
+#         input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
+        
+#         decoded_next_token = tokenizer.decode(next_token)
+
+#         if input_ids[0, -1] == 2:
+#             print(f"count: {count}, input_ids[:, -count:]: {input_ids[:, -count:]}, input_ids shape: {input_ids.shape}, size: {input_ids.size()}, size(1): {input_ids.size(1)}")
+#             break
+#         if input_ids.shape[1] >= 1024:
+#             print("input_ids reached max length")
+#             print(f"count: {count}, input_ids[:, -count:]: {input_ids[:, -count:]}, input_ids shape: {input_ids.shape}, size: {input_ids.size()}, size(1): {input_ids.size(1)}")
+#             break
+        
+#         count += 1
+
+#     # print("input_ids: ", input_ids)
+#     # return input_ids[:, -txt_len:]
+#     return input_ids[:, -count:]
+
+# def respond_to_batch(
+#     model: nn.Module, queries: List[torch.LongTensor], txt_len: int = 100, top_k: int = 0, top_p: float = 1.0, tokenizer=None
+# ) -> torch.LongTensor:
+#     """Sample text from language model."""
+#     input_ids = queries
+#     print("queries: ", queries)
+#     for _i in range(txt_len):
+#         # Get Logits
+#         outputs = model(input_ids)
+#         print("i: ", _i, "outputs shape: ", outputs[0].shape, "outputs: ", outputs)
+#         print("outputs[0]: ", outputs[0])
+#         print("outputs[0][:, -1, :]: ", outputs[0][:, -1, :])
+#         next_token_logits = outputs[0][:, -1, :]
+#         next_token_logits[:, 4:50264] = -float("Inf")
+#         next_token_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
+        
+#         print("i: ", _i, "next_token_logits shape: ", next_token_logits.shape, "next_token_logits: ", next_token_logits)
+        
+#         # Sample
+#         probs = F.softmax(next_token_logits, dim=-1)
+#         print("i: ", _i, "probs shape: ", probs.shape, "probs: ", probs)
+#         next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
+#         print("i: ", _i, "next_token shape: ", next_token.shape, "next_token: ", next_token)
+        
+#         decoded_next_token = tokenizer.decode(next_token)
+#         print("i: ", _i, "decoded_next_token: ", decoded_next_token)
+#         if (next_token == 2).any():
+#             break
+#         input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
+#         print("i: ", _i, "input_ids: ", input_ids)
         
 
-    return input_ids[:, -txt_len:]
+#     return input_ids[:, -txt_len:]
 
 
 def set_seed(seed: int) -> None:
