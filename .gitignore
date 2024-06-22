@@ -156,4 +156,6 @@ output/
 temp.txt
 tokenizer/
 vc/
-dpo_data.json
+*.json
+results/
+model_output/
