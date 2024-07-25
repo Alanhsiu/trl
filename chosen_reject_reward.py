@@ -12,6 +12,7 @@ from vc.encodec_model.nar_bart_model import NARBartForConditionalGeneration
 from transformers import AutoTokenizer, BartForConditionalGeneration
 from datasets import load_from_disk
 import numpy as np
+import time
 
 # load the model
 ar_checkpoint = "lca0503/speech-chatgpt-base-ar-v2-epoch10-wotrans"
@@ -19,7 +20,7 @@ nar_checkpoint = "lca0503/speech-chatgpt-base-nar-v2-epoch4-wotrans"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 base_path = "/work/b0990106x/trl"
 agent_input_dir = f"{base_path}/data-encodec"
-audio_output_dir = f"{base_path}/output/chosen_rejected_audio"
+audio_output_dir = f"{base_path}/output/chosen_rejected_audio_v2"
 ar_tokenizer = AutoTokenizer.from_pretrained(ar_checkpoint)
 ar_model = BartForConditionalGeneration.from_pretrained(ar_checkpoint)
 nar_tokenizer = AutoTokenizer.from_pretrained(nar_checkpoint)
@@ -61,7 +62,7 @@ def get_reward(output_path):
 prompts = dpo_data['prompt']
 chosen = dpo_data['chosen']
 rejected = dpo_data['rejected']
-args_predict = SimpleNamespace(output_path=f"{base_path}/output/chosen_rejected_audio/example.wav", seed=0, device=device)
+args_predict = SimpleNamespace(output_path=f"{base_path}/output/chosen_rejected_audio_v2/example.wav", seed=0, device=device)
 
 data_len = len(prompts)
 print("data_len_1: ", data_len)
@@ -126,28 +127,28 @@ for i in tqdm(range(data_len)):
     rejected_data_id = ar_tokenizer(rejected_data)["input_ids"][1:-1]
     if len(chosen_data_id) <= 1022 and len(rejected_data_id) <= 1022:
         try:
-            temp1 = get_ar_prediction_v2(args_predict, chosen_data_id, nar_model, ar_tokenizer, nar_tokenizer, single_src_encodec, single_instruction, 0)
-            good_reward = get_reward(args_predict.output_path)
+            temp1, out1 = get_ar_prediction_v2(args_predict, chosen_data_id, nar_model, ar_tokenizer, nar_tokenizer, single_src_encodec, single_instruction, 0)
+            time.sleep(0.5)
+            good_reward = get_reward(out1)
         except Exception as e:
             print("Error:", e)
-            print("chosen_data_id:", chosen_data_id)
-            print("single_src_encodec:", single_src_encodec[0])
-            print("single_instruction:", single_instruction)
             good_reward = None
-            raise
         try:
-            temp2 = get_ar_prediction_v2(args_predict, rejected_data_id , nar_model, ar_tokenizer, nar_tokenizer, single_src_encodec, single_instruction, 1)
-            bad_reward = get_reward(args_predict.output_path)
+            temp2, out2 = get_ar_prediction_v2(args_predict, rejected_data_id , nar_model, ar_tokenizer, nar_tokenizer, single_src_encodec, single_instruction, 1)
+            time.sleep(0.5)
+            bad_reward = get_reward(out2)
         except Exception as e:
-            print("Error:", e)
-            print("rejected_data_id:", rejected_data_id)
-            print("single_src_encodec:", single_src_encodec[0])
-            print("single_instruction:", single_instruction)
+            print("Error chosen_reject_reward.py:", e)
             bad_reward = None
-            raise
-
+        
+        print(f"Good reward: {good_reward}")
+        print(f"Bad reward: {bad_reward}")
         chosen_reward.append(good_reward)
         rejected_reward.append(bad_reward)
+    else:
+        print(f"Notice: Chosen or Rejected data is too large")
+        chosen_reward.append(-1)
+        rejected_reward.append(-1)
 
 filtered_rejected_reward = [r for r in rejected_reward if r is not None]
 filtered_chosen_reward = [r for r in chosen_reward if r is not None]
@@ -176,5 +177,5 @@ metrics = {
     "chosen_reward": chosen_reward,
 }
 
-with open("metrics.json", "w") as outfile:
+with open(f"{audio_output_dir}/metrics.json", "w") as outfile:
     json.dump(metrics, outfile, indent=4)
