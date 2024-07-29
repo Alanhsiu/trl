@@ -86,8 +86,7 @@ def get_reward(output_path, base_path):
         return None
 
 def process_and_get_scores(model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, episode_counter=0, base_path="/work/b0990106x/trl", temperature = 1.0):
-    temp, decode_ar, output_path_ckpt = get_ar_prediction_v3(args_predict, model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature = temperature)
-    list_decode_ar = decode_ar.flatten().tolist()
+    _, _, output_path_ckpt = get_ar_prediction_v3(args_predict, model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature = temperature)
     reward = get_reward(output_path_ckpt, base_path)
     return reward
 
@@ -334,7 +333,7 @@ def eval_dpo_mos(
             args_predict, # arguments for the prediction
             all_src_encodec,
             all_instruction,
-            iteration,
+            iteration, # can be number or text
             num_evaluations = 10,
             eval_data_len=1000,
             selected_indices=None,  # Add this parameter
