@@ -12,24 +12,48 @@ import importlib
 import vc
 importlib.reload(vc)
 import torch
-from vc.trainer_encodec_vc_inference import get_ar_prediction_v3, pack_inputs_v2
+from vc.trainer_encodec_vc_inference import pack_inputs_v2, get_ar_prediction_get_audio, get_ar_prediction_audio_batch
 from types import SimpleNamespace
-from transformers import BartForConditionalGeneration, AutoModelForCausalLM, AutoTokenizer
-from NISQA.nisqa.NISQA_model import nisqaModel
+from transformers import BartForConditionalGeneration, AutoTokenizer
 from datasets import Dataset
 from trl import DPOTrainer, DPOConfig, AutoModelForSeq2SeqLMWithValueHead, create_reference_model
 from vc.encodec_model.nar_bart_model import NARBartForConditionalGeneration
 from datetime import datetime
 import os
 import numpy as np
-from dpo_eval import get_reward, eval_dpo_mos
+from dpo_eval import get_reward_claps, eval_dpo_claps_batch, convert_array_to_tensor_format
 import json
 from tqdm import tqdm
 import time
 from typing import List, Tuple
+import random
+import argparse
+
+sys.path.append('/work/b0990106x/trl/CLAPS')
+from CLAPS.inference import load_model
 
 
-# In[ ]:
+# In[2]:
+
+
+def set_seed(seed):
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+
+# In[3]:
+
+
+set_seed(42)
+
+
+# In[4]:
 
 
 def generate_output(
@@ -65,26 +89,86 @@ def generate_output(
             tokenized_decode_ar(str): The tokenized output of the AR model - first layer.
     '''
     # Generate predictions using the AR model
-    _, decode_ar, output_path_ckpt = get_ar_prediction_v3(
+    decode_ar, wav = get_ar_prediction_get_audio(
         args_predict, ar_model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature=temperature
     )
+    # extract the instruction from the list 
 
-    # Flatten the decoded AR output tensor and convert it to a list
-    list_decode_ar = decode_ar.flatten().tolist()   
+    tensor_wav = convert_array_to_tensor_format(wav)
+    if tensor_wav[0].shape[0]==1:
+        tensor_wav[0] = tensor_wav[0].squeeze(0)
 
-    # Evaluate the audio to get the reward
-    reward = get_reward(output_path_ckpt, base_path)
+    reward = get_reward_claps(prompts = instruction, wavs = tensor_wav)
     
-    # Filter the decoded AR output to remove special tokens
+    list_decode_ar = decode_ar.flatten().tolist()   
     filtered_decode_ar_list = list_decode_ar[2:-1]
-
-    # Convert the filtered token IDs back to tokens and then to a string
     decode_ar_tokens = ar_tokenizer.convert_ids_to_tokens(filtered_decode_ar_list)
     tokenized_decode_ar = ar_tokenizer.convert_tokens_to_string(decode_ar_tokens)
+    print(f"REWARD: {reward}")
 
     return reward, tokenized_decode_ar
 
+def generate_output_batch(
+        ar_model, 
+        nar_model, 
+        ar_tokenizer, 
+        nar_tokenizer, 
+        clap_model,
+        accelerator,
+        src_encodec: list, 
+        instruction: list, 
+        args_predict: SimpleNamespace, 
+        episode_counter: int = 0, 
+        base_path: str = "/work/b0990106x/trl", 
+        temperature: float = 1.0
+) -> tuple[float, str]:
+    '''
+    Generates output from AR model, synthesize the audio, and evaluate the audio using NISQA.
 
+    Args:
+        ar_model(BartForConditionalGeneration): AR model
+        nar_model(NarbartForConditionalGeneration): NAR model
+        ar_tokenizer(AutoTokenizer): AR tokenizer
+        nar_tokenizer(AutoTokenizer): NAR tokenizer
+        src_encodec(list): A list of inputs, where each input is a list of layers, and each layer is a list of v_token integers.
+        instruction(list): A list of string of instructions.
+        args_predict(SimpleNamespace): A SimpleNamespace object containing the arguments for the NISQA prediction.
+        episode_counter(int): A counter that determine the name of the output audio.
+        base_path(str): The path to the base directory.
+        temperature(float): The temperature for the AR model.
+
+    Returns:
+        tuple:
+            reward(float): The reward of the audio.
+            tokenized_decode_ar(str): The tokenized output of the AR model - first layer.
+    '''
+    # Generate predictions using the AR model
+    audio_list, decode_ar_list = get_ar_prediction_audio_batch(
+        args_predict, ar_model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature=temperature
+    )
+    # extract the instruction from the list 
+    reward_list,tokenized_decode_ar_list = [], []
+
+    for i, audio in enumerate(audio_list): 
+        # audio ---> tensor([])
+        if audio is not None:
+            tensor_audio = convert_array_to_tensor_format(audio)
+            if tensor_audio[0].shape[0]==1:
+                tensor_audio[0] = tensor_audio[0].squeeze(0)
+            # print(tensor_audio)
+            reward = get_reward_claps(clap_model=clap_model, accelerator=accelerator, prompts = instruction[i], wavs = tensor_audio)
+        else: 
+            reward = 0
+        reward_list.append(reward)
+    
+    for decode_ar in decode_ar_list:
+        list_decode_ar = decode_ar.flatten().tolist()   
+        filtered_decode_ar_list = list_decode_ar[2:-1]
+        decode_ar_tokens = ar_tokenizer.convert_ids_to_tokens(filtered_decode_ar_list)
+        tokenized_decode_ar = ar_tokenizer.convert_tokens_to_string(decode_ar_tokens)
+        tokenized_decode_ar_list.append(tokenized_decode_ar)
+        
+    return reward_list, tokenized_decode_ar_list
 
 def extract_data_from_json(file_path: str) -> Tuple[List[list], List[str], List[list]]:
     """
@@ -104,11 +188,8 @@ def extract_data_from_json(file_path: str) -> Tuple[List[list], List[str], List[
 
     all_src_encodec = [item["src_encodec"] for item in data]
     all_instruction = [item["instruction"] for item in data]
-    all_tgt_encodec = [item["tgt_encodec"] for item in data]
 
-    return all_src_encodec, all_instruction, all_tgt_encodec
-
-
+    return all_src_encodec, all_instruction
 
 def train_model(
         model,
@@ -150,7 +231,6 @@ def train_model(
     training_args = DPOConfig(
         beta = beta,
         output_dir = model_output_dir,
-        generate_during_eval = True,
         resume_from_checkpoint = model_checkpoint if resume_from_checkpoint else None,
         seed = seed,
         per_device_train_batch_size = per_device_train_batch_size,
@@ -159,7 +239,10 @@ def train_model(
         learning_rate = learning_rate,
         max_length = max_length,
         max_prompt_length = max_prompt_length,
-        max_target_length = max_target_length
+        max_target_length = max_target_length,
+        evaluation_strategy="steps",
+        save_steps = 5000,
+        logging_dir = f"{model_output_dir}/logs"
     )
     
     trainer = DPOTrainer(
@@ -179,8 +262,88 @@ def train_model(
     ar_tokenizer.save_pretrained(f"{model_output_dir}/dpo_model")
 
 
-# In[ ]:
+# In[5]:
 
+
+def process_data_batch(sample_size: int, 
+                        ar_model, 
+                        nar_model, 
+                        ar_tokenizer, 
+                        nar_tokenizer, 
+                        clap_model,
+                        accelerator,
+                        all_src_encodec: List[list], 
+                        all_instruction: List[str],
+                        args_predict: SimpleNamespace, 
+                        base_path: str = "/work/b0990106x/trl", 
+                        temperature: float = 1.0, 
+                        iteration: int = 0
+) -> Tuple[List[str], List[str], List[str], List[float], List[float], List[float]]:
+    # If sample size is 1, we cannot choose the best and worst outputs
+    if sample_size < 2:
+        raise ValueError("Parameter 'sample_size' must be greater than 1.")
+
+    chosen, rejected, prompts, chosen_rewards, rejected_rewards, average_rewards = [], [], [], [], [], []
+
+
+    for i in tqdm(range(len(all_src_encodec)), desc="Processing Data"):
+        rewards, tokenized_outputs = [], []
+        size_of_packed_input = (
+            len(all_src_encodec[i][0]) +
+            len(ar_tokenizer(all_instruction[i])["input_ids"][1:-1]) +
+            3
+        )
+        if 4 < size_of_packed_input <= 1024:
+            all_src_encodec_list = [all_src_encodec[i]]*sample_size
+            all_instruction_list = [all_instruction[i]]*sample_size
+            rewards, tokenized_outputs = generate_output_batch(
+                ar_model=ar_model, 
+                nar_model=nar_model, 
+                ar_tokenizer=ar_tokenizer, 
+                nar_tokenizer=nar_tokenizer,
+                src_encodec = all_src_encodec_list,
+                instruction=all_instruction_list, 
+                clap_model=clap_model,
+                accelerator=accelerator,
+                args_predict=args_predict,
+                episode_counter=f"data_{i}",
+                base_path=base_path, 
+                temperature=temperature
+            )
+
+        valid_rewards = [r for r in rewards if r is not None]
+        valid_outputs = [tokenized_outputs[j] for j in range(len(rewards)) if rewards[j] is not None]
+
+        if len(valid_rewards) >= 2:
+            max_reward_index = np.argmax(valid_rewards)
+            min_reward_index = np.argmin(valid_rewards)
+            average_reward = np.mean(valid_rewards)
+            chosen_output = valid_outputs[max_reward_index]
+            rejected_output = valid_outputs[min_reward_index]
+
+            obs_input = pack_inputs_v2(ar_tokenizer, all_src_encodec[i], all_instruction[i])
+            tokenize_input = ar_tokenizer.convert_ids_to_tokens(obs_input)
+            tokenize_input_str = ar_tokenizer.convert_tokens_to_string(tokenize_input)
+            prompts.append(tokenize_input_str)
+
+            chosen.append(chosen_output)
+            chosen_rewards.append(valid_rewards[max_reward_index])
+            rejected.append(rejected_output)
+            rejected_rewards.append(valid_rewards[min_reward_index])
+            average_rewards.append(average_reward)
+        else:
+            print(f"Not enough valid rewards for data index {i}")
+
+    # If there is only one data, we need to double the data because we need it for training set and validation set
+    if len(all_src_encodec) == 1:
+        chosen *= 2
+        rejected *= 2
+        prompts *= 2
+        chosen_rewards *= 2
+        rejected_rewards *= 2
+        average_rewards *= 2    
+    
+    return chosen, rejected, prompts, chosen_rewards, rejected_rewards, average_rewards
 
 def process_data(sample_size: int, 
                  ar_model, 
@@ -229,11 +392,12 @@ def process_data(sample_size: int,
 
         for j in tqdm(range(sample_size), desc="Processing Samples"):
             size_of_packed_input = (
-                    len(all_src_encodec[i][0]) +
-                    len(ar_tokenizer(all_instruction[i])["input_ids"][1:-1]) +
-                    3
+                len(all_src_encodec[i][0]) +
+                len(ar_tokenizer(all_instruction[i])["input_ids"][1:-1]) +
+                3
             )
             if 4 < size_of_packed_input <= 1024:
+                set_seed(42+iteration+j)
                 reward, tokenized_decode_ar = generate_output(
                     ar_model=ar_model, 
                     nar_model=nar_model, 
@@ -242,12 +406,13 @@ def process_data(sample_size: int,
                     src_encodec = all_src_encodec[i],
                     instruction=all_instruction[i], 
                     args_predict=args_predict,
-                    episode_counter=f"iter_{iteration}_data_{i}_episode_{j}",
+                    episode_counter=f"data_{i}_episode_{j}",
                     base_path=base_path, 
                     temperature=temperature
                 )
                 rewards.append(reward)
                 tokenized_outputs.append(tokenized_decode_ar)
+
 
         valid_rewards = [r for r in rewards if r is not None]
         valid_outputs = [tokenized_outputs[j] for j in range(len(rewards)) if rewards[j] is not None]
@@ -283,12 +448,12 @@ def process_data(sample_size: int,
     
     return chosen, rejected, prompts, chosen_rewards, rejected_rewards, average_rewards
 
-
-
 def generate_data(ar_model, 
                   ar_tokenizer, 
                   nar_model, 
                   nar_tokenizer, 
+                  clap_model,
+                  accelerator,
                   selected_src_encodec: List[list], 
                   selected_instruction: List[str],
                   args_predict: SimpleNamespace, 
@@ -321,7 +486,7 @@ def generate_data(ar_model,
             chosen_rewards (List[float]): A list of rewards for the chosen outputs.
             rejected_rewards (List[float]): A list of rewards for the rejected outputs.
     """
-    chosen, rejected, prompts, chosen_rewards, rejected_rewards, average_rewards = process_data(
+    chosen, rejected, prompts, chosen_rewards, rejected_rewards, average_rewards = process_data_batch(
         sample_size=sample_size,
         ar_model=ar_model,
         nar_model=nar_model,
@@ -332,7 +497,9 @@ def generate_data(ar_model,
         args_predict=args_predict,
         base_path=base_path,
         temperature=temperature,
-        iteration = iteration
+        iteration = iteration,
+        clap_model=clap_model,
+        accelerator=accelerator
     )
 
     data = {
@@ -351,8 +518,6 @@ def generate_data(ar_model,
 
     return data_for_dataset, chosen_rewards, rejected_rewards
 
-
-
 def train_iteration(model_checkpoint, 
                     iteration, 
                     data_size, 
@@ -364,6 +529,8 @@ def train_iteration(model_checkpoint,
                     args_predict, 
                     agent_output_dir,
                     model_output_dir_base, 
+                    clap_model,
+                    accelerator,
                     beta = 0.1, 
                     temperature = 1.0,
                     base_path="/work/b0990106x/trl",
@@ -375,7 +542,8 @@ def train_iteration(model_checkpoint,
                     max_target_length = 1024*9,
                     per_device_train_batch_size = 1,
                     gradient_accumulation_steps = 1,
-                    seed = 42 
+                    seed = 42,
+
 ):
     """
     Executes one training iteration: generates data, trains the model, and saves the output.
@@ -384,7 +552,7 @@ def train_iteration(model_checkpoint,
 
     ar_model = BartForConditionalGeneration.from_pretrained(model_checkpoint)
     ar_tokenizer = AutoTokenizer.from_pretrained(ar_checkpoint)
-    ar_tokenizer.pad_token = ar_tokenizer.eos_token
+    # ar_tokenizer.pad_token = ar_tokenizer.eos_token
     nar_model = NARBartForConditionalGeneration.from_pretrained(nar_checkpoint)
     nar_tokenizer = AutoTokenizer.from_pretrained(nar_checkpoint)
 
@@ -402,7 +570,9 @@ def train_iteration(model_checkpoint,
                                                                         iteration=iteration,
                                                                         agent_output_dir=agent_output_dir,
                                                                         base_path=base_path,
-                                                                        temperature=temperature)
+                                                                        temperature=temperature,
+                                                                        clap_model=clap_model,
+                                                                        accelerator=accelerator)
 
     dataset = Dataset.from_dict(data_for_dataset)
     dataset_dict = dataset.train_test_split(test_size=0.1)
@@ -436,11 +606,11 @@ def train_iteration(model_checkpoint,
     return f"{model_output_dir}/dpo_model", chosen_rewards, rejected_rewards
 
 
-# In[ ]:
+# In[6]:
 
 
 # Load all data
-all_src_encodec, all_instruction, all_tgt_encodec = extract_data_from_json('dpo_data/src_encodec.json')
+all_src_encodec, all_instruction = extract_data_from_json('dpo_data/src_encodec.json')
 
 # all_src_encodec = all_src_encodec[2:]
 # all_instruction = all_instruction[2:]
@@ -460,38 +630,42 @@ agent_output_dir = os.path.join(base_path, "output", ts) # Path of saving the ge
 os.makedirs(model_output_dir, exist_ok=True)
 os.makedirs(agent_output_dir, exist_ok=True)
 
+seed = 42 # Training: seed
 
 # Define arguments 
-args_predict = SimpleNamespace(output_path=f"{base_path}/output/{ts}/example.wav", seed=0, device=device)
+args_predict = SimpleNamespace(output_path=f"{base_path}/output/{ts}/example.wav", seed=seed, device=device)
 ar_checkpoint = "lca0503/speech-chatgpt-base-ar-v2-epoch10-wotrans"
 nar_checkpoint = "lca0503/speech-chatgpt-base-nar-v2-epoch4-wotrans"
 
+
 # Models and Iterations
-model_checkpoint = ar_checkpoint # Prepare: set the initial model checkpoint
-sample_size = 10 # Prepare Dataset: generate how many outputs to select max and min for chosen and rejected
-data_size_per_iteration = 10 # Training: each iteration will train how many data
-num_iterations = 30  # Training: train how many iterations
-train_selected_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] # Training: train on selected data indicies from all_src_encodec
+model_checkpoint = "/work/b0990106x/trl/model_output/0901-1233/iter_43/dpo_model"
+ # Prepare: set the initial model checkpoint
+sample_size = 5 # Prepare Dataset: generate how many outputs to select max and min for chosen and rejected
+num_iterations = 45  # Training: train how many iterations
+train_selected_indices = [x for x in range(20)] # Training: train on selected data indicies from all_src_encodec
+data_size_per_iteration = 20 # Training: each iteration will train how many data
 
 # Define Training Configuration
 beta = 0.1 # Training: beta value for DPO
-learning_rate = 1e-06 # Training: learning rate
-num_train_epochs = 500 # Training: number of training epochs
+learning_rate = 5e-07 # Training: learning rate
+num_train_epochs = 100 # Training: number of training epochs
 max_length = 1024*9 # Training: max length of the model
 max_prompt_length = 1024*9 # Training: max length of the prompt
 max_target_length = 1024*9 # Training: max length of the target
-per_device_train_batch_size = 5 # Training: batch size
+per_device_train_batch_size = 1 # Training: batch size
 gradient_accumulation_steps = 1 # Training: gradient accumulation steps
-seed = 42 # Training: seed
+
 
 # Evaluation Configuration
 eval_train = True # Evaluation: evaluate on training data or not
 eval_test = True # Evaluation: evaluate on testing data or not
-eval_train_indices = train_selected_indices # Evaluation: evaluate on training data indicies from all_src_encodec
-eval_test_indices = [10,11,12,13,14,15,16,17,18,19] # Evaluation: evaluate on testing data indicies from all_src_encodec
-eval_train_data_len = 10 # Evaluation: evaluate how many training data
-eval_test_data_len = 10 # Evaluation: evaluate how many testing data
-num_eval = 10 # Evaluation: evaluate how many times per data
+eval_train_indices = [3, 0, 8, 7, 16] # Evaluation: evaluate on training data indicies from all_src_encodec
+eval_test_indices = [20,21,22,23,24] # Evaluation: evaluate on testing data indicies from all_src_encodec
+eval_train_data_len = 5 # Evaluation: evaluate how many training data
+eval_test_data_len = 5 # Evaluation: evaluate how many testing data
+num_eval = 5 # Evaluation: evaluate how many times per data
+eval_frequency = 1 # Evaluation: evaluate every how many iterations
 
 # Define temperature
 # eval_selected_indices = random.sample(range(len(all_src_encodec)), eval_data_len) # Evaluation: select 10 data for evaluation
@@ -499,7 +673,42 @@ print(f"length of all_src_encodec: {len(all_src_encodec)}") # ~ 9000 data
 print(f"length of all_instruction: {len(all_instruction)}") # ~ 9000 data
 
 
-# In[ ]:
+# In[7]:
+
+
+sr = 24000
+text_enc_name = "google/flan-t5-large"
+text_enc_dim = 1024
+text_blstm_dim = 256
+speech_enc_name = "wavlm"
+speech_enc_dim = 768
+speech_blstm_dim = 256
+rep_dim = 512
+sub_dim = 0
+n_sub = 1
+ckpt_pth=f'{base_path}/CLAPS/pretrained/7d/cp_claps_blstm_m_50k_v3/cp_0045000'
+project_dir = "cp_claps"
+
+
+a = argparse.Namespace(
+        sr=sr,
+        text_enc_name=text_enc_name,
+        text_enc_dim=text_enc_dim,
+        text_blstm_dim=text_blstm_dim,
+        speech_enc_name=speech_enc_name,
+        speech_enc_dim=speech_enc_dim,
+        speech_blstm_dim=speech_blstm_dim,
+        rep_dim=rep_dim,
+        sub_dim=sub_dim,
+        n_sub=n_sub,  # Number of subspaces, if any
+        ckpt_pth=ckpt_pth,  # Set your checkpoint path
+        project_dir=project_dir  # Example project directory
+    )
+
+clap_model, accelerator = load_model(a)
+
+
+# In[8]:
 
 
 print(f"num_iterations: {num_iterations}")
@@ -524,7 +733,7 @@ print(f"num_eval: {num_eval}")
 print(all_instruction[0:2])
 
 
-# In[ ]:
+# In[9]:
 
 
 import logging
@@ -570,9 +779,9 @@ logging.info(
 # Start time
 total_start_time = time.time()
 if eval_train:
-    original_model_metrics, original_model_rewards = eval_dpo_mos(ar_checkpoint=ar_checkpoint,
+    original_model_metrics, original_model_rewards = eval_dpo_claps_batch(ar_checkpoint=ar_checkpoint,
                                                                     nar_checkpoint=nar_checkpoint,
-                                                                    trained_model_checkpoint=ar_checkpoint, # original model
+                                                                    trained_model_checkpoint=model_checkpoint, # original model
                                                                     args_predict=args_predict,
                                                                     all_src_encodec=all_src_encodec,
                                                                     all_instruction=all_instruction,
@@ -581,6 +790,8 @@ if eval_train:
                                                                     eval_data_len=eval_train_data_len,
                                                                     selected_indices=eval_train_indices,
                                                                     device=device,
+                                                                    clap_model=clap_model,
+                                                                    accelerator=accelerator
                                                                     )
     logging.info(f"Original Model Train Set Evaluation: ")
     logging.info(f"Original model metrics on training set: {original_model_metrics}")
@@ -588,16 +799,22 @@ if eval_train:
     reward_list = []
     for rewards in original_model_rewards:
         filter_rewards = [r for r in rewards if r is not None]
-        reward_list.append(np.mean(filter_rewards))
+        if len(filter_rewards) == 0:
+            reward_list.append(None)
+        else:
+            reward_list.append(np.mean(filter_rewards))
     logging.info(f"Original model reward list on training set: {reward_list}")
     filter_reward_list = [r for r in reward_list if r is not None]
-    logging.info(f"Original model average rewards on training set: {np.mean(filter_reward_list)}")
+    if len(filter_reward_list) != 0:
+        logging.info(f"Original model average rewards on training set: {np.mean(filter_reward_list)}")
+    else: 
+        logging.info(f"Original model average rewards on training set: None")
     
 
 if eval_test:
-    original_model_metrics, original_model_rewards = eval_dpo_mos(ar_checkpoint=ar_checkpoint,
+    original_model_metrics, original_model_rewards = eval_dpo_claps_batch(ar_checkpoint=ar_checkpoint,
                                                                     nar_checkpoint=nar_checkpoint,
-                                                                    trained_model_checkpoint=ar_checkpoint, # original model
+                                                                    trained_model_checkpoint=model_checkpoint, # original model
                                                                     args_predict=args_predict,
                                                                     all_src_encodec=all_src_encodec,
                                                                     all_instruction=all_instruction,
@@ -606,6 +823,8 @@ if eval_test:
                                                                     eval_data_len=eval_test_data_len,
                                                                     selected_indices=eval_test_indices,
                                                                     device=device,
+                                                                    clap_model=clap_model,
+                                                                    accelerator=accelerator
                                                                     )
     logging.info(f"Original Model Test Set Evaluation: ")
     logging.info(f"Original model metrics on testing set: {original_model_metrics}")
@@ -613,10 +832,17 @@ if eval_test:
     reward_list = []
     for rewards in original_model_rewards:
         filter_rewards = [r for r in rewards if r is not None]
-        reward_list.append(np.mean(rewards))
+        if len(filter_rewards) == 0:
+            reward_list.append(None)
+        else:
+            reward_list.append(np.mean(filter_rewards))
     logging.info(f"Original model reward list on testing set: {reward_list}")
-    filter_reward_list = [r for r in reward_list if r is not None]  
-    logging.info(f"Original model average rewards on testing set: {np.mean(filter_reward_list)}")
+    filter_reward_list = [r for r in reward_list if r is not None]
+    if len(filter_reward_list) != 0:
+        logging.info(f"Original model average rewards on testing set: {np.mean(filter_reward_list)}")
+    else: 
+        logging.info(f"Original model average rewards on testing set: None")
+    
 
     
 # If train_selected_indices is not empty, we will use the selected indices for training
@@ -635,8 +861,6 @@ for iteration in tqdm(range(num_iterations), desc="Training Iterations"):
     logging.info(f"-----------Starting iteration {iteration}-----------")
     
     resume = iteration > 0 # resume from the previous checkpoint when iteration > 0
-
-    logging.info(f"Starting iteration {iteration}")
     
     # model_checkpoint is the model checkpoint from the previous iteration
     # chosen_rewards and rejected_rewards are the rewards of the data
@@ -662,62 +886,84 @@ for iteration in tqdm(range(num_iterations), desc="Training Iterations"):
                                 max_target_length=max_target_length,
                                 per_device_train_batch_size=per_device_train_batch_size,
                                 gradient_accumulation_steps=gradient_accumulation_steps,
-                                seed=seed
-                                )
+                                seed=seed,
+                                clap_model=clap_model,
+                                accelerator=accelerator
+                                )       
 
     logging.info(f"Chosen rewards for iteration {iteration}: {chosen_rewards}")
     logging.info(f"Rejected rewards for iteration {iteration}: {rejected_rewards}")
     logging.info(f"Finished training iteration {iteration}")
 
+    if (iteration+1) % eval_frequency == 0:
     # Evaluate the result of the current iteration
-    if eval_train:
-        trained_model_metrics, trained_model_rewards = eval_dpo_mos(ar_checkpoint=ar_checkpoint,
-                                                                    nar_checkpoint=nar_checkpoint,
-                                                                    trained_model_checkpoint=model_checkpoint,
-                                                                    args_predict=args_predict,
-                                                                    all_src_encodec=all_src_encodec,
-                                                                    all_instruction=all_instruction,
-                                                                    iteration = iteration,
-                                                                    num_evaluations = num_eval,
-                                                                    eval_data_len=eval_train_data_len,
-                                                                    selected_indices=eval_train_indices,
-                                                                    device=device
-                                                                    )
-        logging.info(f"Trained Model Iteration {iteration} Train Set Evaluation: ")
-        logging.info(f"EVAL: MOS metrics Training Set for iteration {iteration}: {trained_model_metrics}")
-        logging.info(f"EVAL: MOS score Training Set for iteration {iteration}: {trained_model_rewards}")
-        reward_list = []
-        for rewards in trained_model_rewards:
-            filter_rewards = [r for r in rewards if r is not None]
-            reward_list.append(np.mean(filter_rewards))
-        logging.info(f"EVAL: Trained model MOS score list on training set: {reward_list}")
-        filter_reward_list = [r for r in reward_list if r is not None]
-        logging.info(f"EVAL: Trained model average MOS score on training set: {np.mean(filter_reward_list)}")
+        if eval_train:
+            trained_model_metrics, trained_model_rewards = eval_dpo_claps_batch(ar_checkpoint=ar_checkpoint,
+                                                                        nar_checkpoint=nar_checkpoint,
+                                                                        trained_model_checkpoint=model_checkpoint,
+                                                                        args_predict=args_predict,
+                                                                        all_src_encodec=all_src_encodec,
+                                                                        all_instruction=all_instruction,
+                                                                        iteration = iteration,
+                                                                        num_evaluations = num_eval,
+                                                                        eval_data_len=eval_train_data_len,
+                                                                        selected_indices=eval_train_indices,
+                                                                        device=device,
+                                                                        clap_model=clap_model,
+                                                                        accelerator=accelerator
+                                                                        )
+            logging.info(f"Trained Model Iteration {iteration} Train Set Evaluation: ")
+            logging.info(f"EVAL: Cosine_Sim metrics Training Set for iteration {iteration}: {trained_model_metrics}")
+            logging.info(f"EVAL: Cosine_Sim score Training Set for iteration {iteration}: {trained_model_rewards}")
 
-    if eval_test:
-        trained_model_metrics, trained_model_rewards = eval_dpo_mos(ar_checkpoint=ar_checkpoint,
-                                                                    nar_checkpoint=nar_checkpoint,
-                                                                    trained_model_checkpoint=model_checkpoint,
-                                                                    args_predict=args_predict,
-                                                                    all_src_encodec=all_src_encodec,
-                                                                    all_instruction=all_instruction,
-                                                                    iteration = iteration,
-                                                                    num_evaluations = num_eval,
-                                                                    eval_data_len=eval_test_data_len,
-                                                                    selected_indices=eval_test_indices,
-                                                                    device=device
-                                                                    )
-        logging.info(f"Trained Model Iteration {iteration} Test Set Evaluation: ")
-        logging.info(f"EVAL: MOS metrics Testing Set for iteration {iteration}: {trained_model_metrics}")
-        logging.info(f"EVAL: MOS score Testing Set for iteration {iteration}: {trained_model_rewards}")
-        reward_list = []
-        for rewards in trained_model_rewards:
-            filter_rewards = [r for r in rewards if r is not None]
-            reward_list.append(np.mean(filter_rewards))
-        logging.info(f"EVAL: Trained model MOS score list on testing set: {reward_list}")
-        filter_reward_list = [r for r in reward_list if r is not None]  
-        logging.info(f"EVAL: Trained model average MOS score on testing set: {np.mean(filter_reward_list)}")
+            reward_list = []
+            for rewards in trained_model_rewards:
+                filter_rewards = [r for r in rewards if r is not None]
+                if len(filter_rewards) == 0:
+                    reward_list.append(None)
+                else:
+                    reward_list.append(np.mean(filter_rewards))
+            logging.info(f"EVAL: Trained model Cosine_Sim score list on training set: {reward_list}")
+            filter_reward_list = [r for r in reward_list if r is not None]
+            if len(filter_reward_list) != 0:
+                logging.info(f"EVAL: Trained model average Cosine_Sim score on training set: {np.mean(filter_reward_list)}")
+            else:
+                logging.info(f"EVAL: Trained model average Cosine_Sim score on training set: None")
 
+        if eval_test:
+            trained_model_metrics, trained_model_rewards = eval_dpo_claps_batch(ar_checkpoint=ar_checkpoint,
+                                                                        nar_checkpoint=nar_checkpoint,
+                                                                        trained_model_checkpoint=model_checkpoint,
+                                                                        args_predict=args_predict,
+                                                                        all_src_encodec=all_src_encodec,
+                                                                        all_instruction=all_instruction,
+                                                                        iteration = iteration,
+                                                                        num_evaluations = num_eval,
+                                                                        eval_data_len=eval_test_data_len,
+                                                                        selected_indices=eval_test_indices,
+                                                                        device=device,
+                                                                        clap_model=clap_model,
+                                                                        accelerator=accelerator
+                                                                        )
+            logging.info(f"Trained Model Iteration {iteration} Test Set Evaluation: ")
+            logging.info(f"EVAL: Cosine_Sim metrics Testing Set for iteration {iteration}: {trained_model_metrics}")
+            logging.info(f"EVAL: Cosine_Sim score Testing Set for iteration {iteration}: {trained_model_rewards}")
+
+            reward_list = []
+            for rewards in trained_model_rewards:
+                filter_rewards = [r for r in rewards if r is not None]
+                if len(filter_rewards) == 0:
+                    reward_list.append(None)
+                else:
+                    reward_list.append(np.mean(filter_rewards))
+            logging.info(f"EVAL: Trained model Cosine_Sim score list on testing set: {reward_list}")
+            filter_reward_list = [r for r in reward_list if r is not None]
+            if len(filter_reward_list) != 0:
+                logging.info(f"EVAL: Trained model average Cosine_Sim score on testing set: {np.mean(filter_reward_list)}")
+            else:
+                logging.info(f"EVAL: Trained model average Cosine_Sim score on testing set: None")
+
+    logging.info(f"-----------Finished iteration {iteration}-----------")
 total_end_time = time.time()
 
 # Calculate total time taken

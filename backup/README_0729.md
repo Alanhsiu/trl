@@ -20,7 +20,8 @@ A Jupyter notebook used to train and evaluate a model using the MOSNET score acq
 A Jupyter notebook that serves two main purposes:
 1. Continues training from a saved checkpoint.
 2. Evaluates the MOS score of any trained model checkpoint.
-
+### `test_audio_metrics.ipynb`
+A Jupyter notebook that test out different audio metrics
 ## Directories
 
 ### `model_output/{ts}`
