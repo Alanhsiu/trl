@@ -315,91 +315,91 @@ def eval_dpo_token_length(
 
     return all_data_metrics
 
-def eval_dpo_even_token(
-    ar_checkpoint, # checkpoint for the AR model
-    nar_checkpoint, # checkpoint for the NAR model
-    trained_model_checkpoint, # path checkpoint for the trained model
-    args_predict, # arguments for the prediction
-    all_src_encodec,
-    all_instruction,
-    iteration,
-    eval_data_len=1000,
-    num_evaluations = 10,
-    selected_indices=None,  # Add this parameter
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    ):
+# def eval_dpo_even_token(
+#     ar_checkpoint, # checkpoint for the AR model
+#     nar_checkpoint, # checkpoint for the NAR model
+#     trained_model_checkpoint, # path checkpoint for the trained model
+#     args_predict, # arguments for the prediction
+#     all_src_encodec,
+#     all_instruction,
+#     iteration,
+#     eval_data_len=1000,
+#     num_evaluations = 10,
+#     selected_indices=None,  # Add this parameter
+#     device = "cuda" if torch.cuda.is_available() else "cpu"
+#     ):
     
-    nar_model, ar_tokenizer, nar_tokenizer = load_models_and_tokenizers(ar_checkpoint, nar_checkpoint)
-    trained_model = BartForConditionalGeneration.from_pretrained(trained_model_checkpoint, return_dict=True)
-    trained_model.to(device)
+#     nar_model, ar_tokenizer, nar_tokenizer = load_models_and_tokenizers(ar_checkpoint, nar_checkpoint)
+#     trained_model = BartForConditionalGeneration.from_pretrained(trained_model_checkpoint, return_dict=True)
+#     trained_model.to(device)
 
-    all_data_metrics = []
+#     all_data_metrics = []
 
-    data_indices = selected_indices if selected_indices is not None else range(len(all_instruction))
-    data_len = len(data_indices)
-    target_rewards = min(eval_data_len, data_len)
+#     data_indices = selected_indices if selected_indices is not None else range(len(all_instruction))
+#     data_len = len(data_indices)
+#     target_rewards = min(eval_data_len, data_len)
 
-    count_rewards = 0
-    i = 0
+#     count_rewards = 0
+#     i = 0
 
-    while count_rewards < target_rewards:
-        if i >= data_len:
-            print("Exceeded initial data length.")
-            break
+#     while count_rewards < target_rewards:
+#         if i >= data_len:
+#             print("Exceeded initial data length.")
+#             break
         
-        idx = data_indices[i]
-        instruction = all_instruction[idx]
-        src_encodec = all_src_encodec[idx]
-        size_of_packed_input = (len(src_encodec[0]) + len(ar_tokenizer(instruction)["input_ids"][1:-1]) + 3)
+#         idx = data_indices[i]
+#         instruction = all_instruction[idx]
+#         src_encodec = all_src_encodec[idx]
+#         size_of_packed_input = (len(src_encodec[0]) + len(ar_tokenizer(instruction)["input_ids"][1:-1]) + 3)
         
-        if size_of_packed_input <= 1024 and size_of_packed_input > 4:
-            rewards = []
-            even_percent_list = []
-            even_total_list = []
+#         if size_of_packed_input <= 1024 and size_of_packed_input > 4:
+#             rewards = []
+#             even_percent_list = []
+#             even_total_list = []
 
-            for j in range(num_evaluations):
-                reward, even_percent, even_total = process_and_get_even_reward(
-                    trained_model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict,
-                    episode_counter=f"eval_{iteration}_data_{idx}_{j}"
-                )
-                rewards.append(reward)
-                even_percent_list.append(even_percent)
-                even_total_list.append(even_total)
+#             for j in range(num_evaluations):
+#                 reward, even_percent, even_total = process_and_get_even_reward(
+#                     trained_model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict,
+#                     episode_counter=f"eval_{iteration}_data_{idx}_{j}"
+#                 )
+#                 rewards.append(reward)
+#                 even_percent_list.append(even_percent)
+#                 even_total_list.append(even_total)
 
-            filtered_rewards = [r for r in rewards if r is not None]
-            filtered_even_total = [r for r in even_total_list if r is not None]
-            metrics = {
-                "mean": np.mean(filtered_rewards),
-                "median": np.median(filtered_rewards),
-                "std_dev": np.std(filtered_rewards),
-                "variance": np.var(filtered_rewards),
-                "min": np.min(filtered_rewards),
-                "max": np.max(filtered_rewards),
-                "25th_percentile": np.percentile(filtered_rewards, 25),
-                "75th_percentile": np.percentile(filtered_rewards, 75),
-                "rewards": rewards,
-                "even_percent": even_percent_list,
-                "even_total": even_total_list,
-                "even_total_avg": np.mean(filtered_even_total)
-            }
-            all_data_metrics.append({
-                "idx": idx,
-                "metrics": metrics
-            })
-            count_rewards += 1
-        else:
-            print(f"Skipping data point {idx} due to insufficient packed input size.")
-        i += 1
+#             filtered_rewards = [r for r in rewards if r is not None]
+#             filtered_even_total = [r for r in even_total_list if r is not None]
+#             metrics = {
+#                 "mean": np.mean(filtered_rewards),
+#                 "median": np.median(filtered_rewards),
+#                 "std_dev": np.std(filtered_rewards),
+#                 "variance": np.var(filtered_rewards),
+#                 "min": np.min(filtered_rewards),
+#                 "max": np.max(filtered_rewards),
+#                 "25th_percentile": np.percentile(filtered_rewards, 25),
+#                 "75th_percentile": np.percentile(filtered_rewards, 75),
+#                 "rewards": rewards,
+#                 "even_percent": even_percent_list,
+#                 "even_total": even_total_list,
+#                 "even_total_avg": np.mean(filtered_even_total)
+#             }
+#             all_data_metrics.append({
+#                 "idx": idx,
+#                 "metrics": metrics
+#             })
+#             count_rewards += 1
+#         else:
+#             print(f"Skipping data point {idx} due to insufficient packed input size.")
+#         i += 1
 
-    return all_data_metrics
+#     return all_data_metrics
     
-    # filtered_rewards = [r for r in trained_model_rewards if r is not None]
+#     # filtered_rewards = [r for r in trained_model_rewards if r is not None]
 
-    # filtered_trained_model_rewards = [r for r in trained_model_rewards if r is not None]
+#     # filtered_trained_model_rewards = [r for r in trained_model_rewards if r is not None]
 
-    # trained_model_metrics = calculate_metrics(filtered_trained_model_rewards)
+#     # trained_model_metrics = calculate_metrics(filtered_trained_model_rewards)
 
-    # return trained_model_metrics, trained_model_rewards, trained_model_even_percent, trained_model_even_total
+#     # return trained_model_metrics, trained_model_rewards, trained_model_even_percent, trained_model_even_total
 
 def eval_dpo_mos(
             ar_checkpoint, # checkpoint for the AR model
@@ -542,9 +542,13 @@ def eval_dpo_mos(
 #     return all_data_metrics, all_rewards
 
 def eval_dpo_claps_batch(
-        ar_checkpoint, # checkpoint for the AR model
-        nar_checkpoint, # checkpoint for the NAR model
-        trained_model_checkpoint, # path checkpoint for the trained model
+        # ar_checkpoint, # checkpoint for the AR model
+        # nar_checkpoint, # checkpoint for the NAR model
+        nar_model,
+        ar_tokenizer,
+        nar_tokenizer,
+        trained_model,
+        # trained_model_checkpoint, # path checkpoint for the trained model
         args_predict, # arguments for the prediction
         all_src_encodec,
         all_instruction,
@@ -555,11 +559,10 @@ def eval_dpo_claps_batch(
         eval_data_len=1000,
         selected_indices=None,  # Add this parameter
         device = "cuda" if torch.cuda.is_available() else "cpu",
-        
         ):
     # load models and tokenizer
-    nar_model, ar_tokenizer, nar_tokenizer = load_models_and_tokenizers(ar_checkpoint, nar_checkpoint)
-    trained_model = BartForConditionalGeneration.from_pretrained(trained_model_checkpoint, return_dict=True)
+    # nar_model, ar_tokenizer, nar_tokenizer = load_models_and_tokenizers(ar_checkpoint, nar_checkpoint)
+    # trained_model = BartForConditionalGeneration.from_pretrained(trained_model_checkpoint, return_dict=True)
     trained_model.to(device)
     # List for storing rewards
     all_data_metrics = []

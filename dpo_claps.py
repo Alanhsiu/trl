@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# # Training
+# ### Import Libraries
 
 # In[1]:
 
@@ -21,7 +21,7 @@ from vc.encodec_model.nar_bart_model import NARBartForConditionalGeneration
 from datetime import datetime
 import os
 import numpy as np
-from dpo_eval import get_reward_claps, eval_dpo_claps_batch, convert_array_to_tensor_format
+from dpo_eval import get_reward_claps ,eval_dpo_claps_batch, convert_array_to_tensor_format
 import json
 from tqdm import tqdm
 import time
@@ -32,6 +32,8 @@ import argparse
 sys.path.append('/work/b0990106x/trl/CLAPS')
 from CLAPS.inference import load_model
 
+
+# ### Utility Functions
 
 # In[2]:
 
@@ -50,64 +52,6 @@ def set_seed(seed):
 # In[3]:
 
 
-set_seed(42)
-
-
-# In[4]:
-
-
-def generate_output(
-        ar_model, 
-        nar_model, 
-        ar_tokenizer, 
-        nar_tokenizer, 
-        src_encodec: list, 
-        instruction: list, 
-        args_predict: SimpleNamespace, 
-        episode_counter: int = 0, 
-        base_path: str = "/work/b0990106x/trl", 
-        temperature: float = 1.0
-) -> tuple[float, str]:
-    '''
-    Generates output from AR model, synthesize the audio, and evaluate the audio using NISQA.
-
-    Args:
-        ar_model(BartForConditionalGeneration): AR model
-        nar_model(NarbartForConditionalGeneration): NAR model
-        ar_tokenizer(AutoTokenizer): AR tokenizer
-        nar_tokenizer(AutoTokenizer): NAR tokenizer
-        src_encodec(list): A list of inputs, where each input is a list of layers, and each layer is a list of v_token integers.
-        instruction(list): A list of string of instructions.
-        args_predict(SimpleNamespace): A SimpleNamespace object containing the arguments for the NISQA prediction.
-        episode_counter(int): A counter that determine the name of the output audio.
-        base_path(str): The path to the base directory.
-        temperature(float): The temperature for the AR model.
-
-    Returns:
-        tuple:
-            reward(float): The reward of the audio.
-            tokenized_decode_ar(str): The tokenized output of the AR model - first layer.
-    '''
-    # Generate predictions using the AR model
-    decode_ar, wav = get_ar_prediction_get_audio(
-        args_predict, ar_model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature=temperature
-    )
-    # extract the instruction from the list 
-
-    tensor_wav = convert_array_to_tensor_format(wav)
-    if tensor_wav[0].shape[0]==1:
-        tensor_wav[0] = tensor_wav[0].squeeze(0)
-
-    reward = get_reward_claps(prompts = instruction, wavs = tensor_wav)
-    
-    list_decode_ar = decode_ar.flatten().tolist()   
-    filtered_decode_ar_list = list_decode_ar[2:-1]
-    decode_ar_tokens = ar_tokenizer.convert_ids_to_tokens(filtered_decode_ar_list)
-    tokenized_decode_ar = ar_tokenizer.convert_tokens_to_string(decode_ar_tokens)
-    print(f"REWARD: {reward}")
-
-    return reward, tokenized_decode_ar
-
 def generate_output_batch(
         ar_model, 
         nar_model, 
@@ -124,19 +68,6 @@ def generate_output_batch(
 ) -> tuple[float, str]:
     '''
     Generates output from AR model, synthesize the audio, and evaluate the audio using NISQA.
-
-    Args:
-        ar_model(BartForConditionalGeneration): AR model
-        nar_model(NarbartForConditionalGeneration): NAR model
-        ar_tokenizer(AutoTokenizer): AR tokenizer
-        nar_tokenizer(AutoTokenizer): NAR tokenizer
-        src_encodec(list): A list of inputs, where each input is a list of layers, and each layer is a list of v_token integers.
-        instruction(list): A list of string of instructions.
-        args_predict(SimpleNamespace): A SimpleNamespace object containing the arguments for the NISQA prediction.
-        episode_counter(int): A counter that determine the name of the output audio.
-        base_path(str): The path to the base directory.
-        temperature(float): The temperature for the AR model.
-
     Returns:
         tuple:
             reward(float): The reward of the audio.
@@ -262,7 +193,7 @@ def train_model(
     ar_tokenizer.save_pretrained(f"{model_output_dir}/dpo_model")
 
 
-# In[5]:
+# In[4]:
 
 
 def process_data_batch(sample_size: int, 
@@ -345,109 +276,6 @@ def process_data_batch(sample_size: int,
     
     return chosen, rejected, prompts, chosen_rewards, rejected_rewards, average_rewards
 
-def process_data(sample_size: int, 
-                 ar_model, 
-                 nar_model, 
-                 ar_tokenizer, 
-                 nar_tokenizer, 
-                 all_src_encodec: List[list], 
-                 all_instruction: List[str],
-                 args_predict: SimpleNamespace, 
-                 base_path: str = "/work/b0990106x/trl", 
-                 temperature: float = 1.0, 
-                 iteration: int = 0
-) -> Tuple[List[str], List[str], List[str], List[float], List[float], List[float]]:
-    """
-    Process data to generate outputs, calculate rewards, and organize chosen and rejected data.
-
-    Args:
-        sample_size (int): The number of samples to generate for each data.
-        ar_model (BartForConditionalGeneration): The AR model.
-        nar_model (NarbartForConditionalGeneration): The NAR model.
-        ar_tokenizer (AutoTokenizer): The AR tokenizer.
-        nar_tokenizer (AutoTokenizer): The NAR tokenizer.
-        all_src_encodec (List[list]): A list of src_encodec data.
-        all_instruction (List[str]): A list of instruction data.
-        args_predict (SimpleNamespace): A SimpleNamespace object containing the arguments for the NISQA prediction.
-        base_path (str): The path to the base directory.
-        temperature (float): The temperature for the AR model.
-
-    Returns:
-        tuple:
-            chosen (List[str]): A list of chosen outputs.
-            rejected (List[str]): A list of rejected outputs.
-            prompts (List[str]): A list of prompts.
-            chosen_rewards (List[float]): A list of rewards for the chosen outputs.
-            rejected_rewards (List[float]): A list of rewards for the rejected outputs.
-            average_rewards (List[float]): A list of average rewards.
-    """
-    # If sample size is 1, we cannot choose the best and worst outputs
-    if sample_size < 2:
-        raise ValueError("Parameter 'sample_size' must be greater than 1.")
-
-    chosen, rejected, prompts, chosen_rewards, rejected_rewards, average_rewards = [], [], [], [], [], []
-
-    for i in tqdm(range(len(all_src_encodec)), desc="Processing Data"):
-        rewards, tokenized_outputs = [], []
-
-        for j in tqdm(range(sample_size), desc="Processing Samples"):
-            size_of_packed_input = (
-                len(all_src_encodec[i][0]) +
-                len(ar_tokenizer(all_instruction[i])["input_ids"][1:-1]) +
-                3
-            )
-            if 4 < size_of_packed_input <= 1024:
-                set_seed(42+iteration+j)
-                reward, tokenized_decode_ar = generate_output(
-                    ar_model=ar_model, 
-                    nar_model=nar_model, 
-                    ar_tokenizer=ar_tokenizer, 
-                    nar_tokenizer=nar_tokenizer,
-                    src_encodec = all_src_encodec[i],
-                    instruction=all_instruction[i], 
-                    args_predict=args_predict,
-                    episode_counter=f"data_{i}_episode_{j}",
-                    base_path=base_path, 
-                    temperature=temperature
-                )
-                rewards.append(reward)
-                tokenized_outputs.append(tokenized_decode_ar)
-
-
-        valid_rewards = [r for r in rewards if r is not None]
-        valid_outputs = [tokenized_outputs[j] for j in range(len(rewards)) if rewards[j] is not None]
-
-        if len(valid_rewards) >= 2:
-            max_reward_index = np.argmax(valid_rewards)
-            min_reward_index = np.argmin(valid_rewards)
-            average_reward = np.mean(valid_rewards)
-            chosen_output = valid_outputs[max_reward_index]
-            rejected_output = valid_outputs[min_reward_index]
-
-            obs_input = pack_inputs_v2(ar_tokenizer, all_src_encodec[i], all_instruction[i])
-            tokenize_input = ar_tokenizer.convert_ids_to_tokens(obs_input)
-            tokenize_input_str = ar_tokenizer.convert_tokens_to_string(tokenize_input)
-            prompts.append(tokenize_input_str)
-
-            chosen.append(chosen_output)
-            chosen_rewards.append(valid_rewards[max_reward_index])
-            rejected.append(rejected_output)
-            rejected_rewards.append(valid_rewards[min_reward_index])
-            average_rewards.append(average_reward)
-        else:
-            print(f"Not enough valid rewards for data index {i}")
-
-    # If there is only one data, we need to double the data because we need it for training set and validation set
-    if len(all_src_encodec) == 1:
-        chosen *= 2
-        rejected *= 2
-        prompts *= 2
-        chosen_rewards *= 2
-        rejected_rewards *= 2
-        average_rewards *= 2    
-    
-    return chosen, rejected, prompts, chosen_rewards, rejected_rewards, average_rewards
-
 def generate_data(ar_model, 
                   ar_tokenizer, 
                   nar_model, 
@@ -465,21 +293,6 @@ def generate_data(ar_model,
 ) -> Tuple[dict, List[float], List[float]]:
     """
     Generates data for the dataset and saves info to a JSON file.
-
-    Args:
-        ar_model (BartForConditionalGeneration): The AR model.
-        ar_tokenizer (AutoTokenizer): The AR tokenizer.
-        nar_model (NarbartForConditionalGeneration): The NAR model.
-        nar_tokenizer (AutoTokenizer): The NAR tokenizer.
-        selected_src_encodec (List[list]): A list of src_encodec data.
-        selected_instruction (List[str]): A list of instruction data.
-        args_predict (SimpleNamespace): A SimpleNamespace object containing the arguments for the NISQA prediction.
-        sample_size (int): The number of samples to generate for each data.
-        iteration (int): The iteration number.
-        agent_output_dir (str): The output directory for the agent.
-        base_path (str): The path to the base directory.
-        temperature (float): The temperature for the AR model.
-    
     Returns:
         tuple:
             data_for_dataset (dict): A dictionary containing the data for the dataset.
@@ -543,7 +356,6 @@ def train_iteration(model_checkpoint,
                     per_device_train_batch_size = 1,
                     gradient_accumulation_steps = 1,
                     seed = 42,
-
 ):
     """
     Executes one training iteration: generates data, trains the model, and saves the output.
@@ -606,14 +418,13 @@ def train_iteration(model_checkpoint,
     return f"{model_output_dir}/dpo_model", chosen_rewards, rejected_rewards
 
 
-# In[6]:
+# ### Hyperparameters
+
+# In[5]:
 
 
 # Load all data
 all_src_encodec, all_instruction = extract_data_from_json('dpo_data/src_encodec.json')
-
-# all_src_encodec = all_src_encodec[2:]
-# all_instruction = all_instruction[2:]
 
 # Define paths and device
 base_path = "/work/b0990106x/trl"
@@ -637,18 +448,17 @@ args_predict = SimpleNamespace(output_path=f"{base_path}/output/{ts}/example.wav
 ar_checkpoint = "lca0503/speech-chatgpt-base-ar-v2-epoch10-wotrans"
 nar_checkpoint = "lca0503/speech-chatgpt-base-nar-v2-epoch4-wotrans"
 
-
 # Models and Iterations
-model_checkpoint = "/work/b0990106x/trl/model_output/0901-1233/iter_43/dpo_model"
- # Prepare: set the initial model checkpoint
-sample_size = 5 # Prepare Dataset: generate how many outputs to select max and min for chosen and rejected
-num_iterations = 45  # Training: train how many iterations
-train_selected_indices = [x for x in range(20)] # Training: train on selected data indicies from all_src_encodec
-data_size_per_iteration = 20 # Training: each iteration will train how many data
+model_checkpoint = ar_checkpoint # Prepare: set the initial model checkpoint
+sample_size = 2 # Prepare Dataset: generate how many outputs to select max and min for chosen and rejected (original: 5)
+num_iterations = 100  # Training: train how many iterations
+train_selected_indices = [5,6] # Training: train on selected data indicies from all_src_encodec
+ # Training: train on selected data indicies from all_src_encodec
+data_size_per_iteration = 1 # Training: each iteration will train how many data
 
 # Define Training Configuration
 beta = 0.1 # Training: beta value for DPO
-learning_rate = 5e-07 # Training: learning rate
+learning_rate = 5e-05 # Training: learning rate (original: 5e-07)
 num_train_epochs = 100 # Training: number of training epochs
 max_length = 1024*9 # Training: max length of the model
 max_prompt_length = 1024*9 # Training: max length of the prompt
@@ -659,21 +469,20 @@ gradient_accumulation_steps = 1 # Training: gradient accumulation steps
 
 # Evaluation Configuration
 eval_train = True # Evaluation: evaluate on training data or not
-eval_test = True # Evaluation: evaluate on testing data or not
-eval_train_indices = [3, 0, 8, 7, 16] # Evaluation: evaluate on training data indicies from all_src_encodec
-eval_test_indices = [20,21,22,23,24] # Evaluation: evaluate on testing data indicies from all_src_encodec
-eval_train_data_len = 5 # Evaluation: evaluate how many training data
-eval_test_data_len = 5 # Evaluation: evaluate how many testing data
-num_eval = 5 # Evaluation: evaluate how many times per data
+eval_test = False # Evaluation: evaluate on testing data or not
+eval_train_indices = train_selected_indices # Evaluation: evaluate on training data indicies from all_src_encodec
+eval_test_indices = [] # Evaluation: evaluate on testing data indicies from all_src_encodec
+eval_train_data_len = 1000 # Evaluation: evaluate how many training data
+eval_test_data_len = 1 # Evaluation: evaluate how many testing data (Alan: I think it is redundant)
+num_eval = 2 # Evaluation: evaluate how many times per data (original: 10)
 eval_frequency = 1 # Evaluation: evaluate every how many iterations
-
 # Define temperature
 # eval_selected_indices = random.sample(range(len(all_src_encodec)), eval_data_len) # Evaluation: select 10 data for evaluation
 print(f"length of all_src_encodec: {len(all_src_encodec)}") # ~ 9000 data
 print(f"length of all_instruction: {len(all_instruction)}") # ~ 9000 data
 
 
-# In[7]:
+# In[6]:
 
 
 sr = 24000
@@ -688,7 +497,6 @@ sub_dim = 0
 n_sub = 1
 ckpt_pth=f'{base_path}/CLAPS/pretrained/7d/cp_claps_blstm_m_50k_v3/cp_0045000'
 project_dir = "cp_claps"
-
 
 a = argparse.Namespace(
         sr=sr,
@@ -708,13 +516,15 @@ a = argparse.Namespace(
 clap_model, accelerator = load_model(a)
 
 
-# In[8]:
+# In[10]:
 
 
 print(f"num_iterations: {num_iterations}")
 print(f"data_size_per_iteration: {data_size_per_iteration}")
 print(f"sample_size: {sample_size}")
 print(f"beta: {beta}")
+print(f"learning_rate: {learning_rate}")
+print(f"num_train_epochs: {num_train_epochs}")
 print(f"ar_checkpoint: {ar_checkpoint}")
 print(f"nar_checkpoint: {nar_checkpoint}")
 print(f"args_predict: {args_predict}")
@@ -730,16 +540,30 @@ print(f"eval_train: {eval_train}")
 print(f"eval_test: {eval_test}")
 print(f"num_eval: {num_eval}")
 
-print(all_instruction[0:2])
+# print training data
+for i in train_selected_indices:
+    print('training idx', i,':', all_instruction[i])
+    
+# print evaluation data
+for i in eval_train_indices:
+    print('evaluation idx', i,':', all_instruction[i])
 
 
-# In[9]:
+
+
+# ### Main Function
+
+# In[8]:
 
 
 import logging
+
+log_path = f'{model_output_dir}/log_training.log'
+print(f"Logging to: {log_path}")
+
 # Set up logging
 logging.basicConfig(
-    filename=f'{model_output_dir}/log_training.log', 
+    filename=log_path, 
     filemode='a', 
     format='%(asctime)s - %(levelname)s - %(message)s', 
     level=logging.INFO
@@ -781,7 +605,7 @@ total_start_time = time.time()
 if eval_train:
     original_model_metrics, original_model_rewards = eval_dpo_claps_batch(ar_checkpoint=ar_checkpoint,
                                                                     nar_checkpoint=nar_checkpoint,
-                                                                    trained_model_checkpoint=model_checkpoint, # original model
+                                                                    trained_model_checkpoint=ar_checkpoint, # original model
                                                                     args_predict=args_predict,
                                                                     all_src_encodec=all_src_encodec,
                                                                     all_instruction=all_instruction,
@@ -810,11 +634,10 @@ if eval_train:
     else: 
         logging.info(f"Original model average rewards on training set: None")
     
-
 if eval_test:
     original_model_metrics, original_model_rewards = eval_dpo_claps_batch(ar_checkpoint=ar_checkpoint,
                                                                     nar_checkpoint=nar_checkpoint,
-                                                                    trained_model_checkpoint=model_checkpoint, # original model
+                                                                    trained_model_checkpoint=ar_checkpoint, # original model
                                                                     args_predict=args_predict,
                                                                     all_src_encodec=all_src_encodec,
                                                                     all_instruction=all_instruction,
@@ -842,8 +665,6 @@ if eval_test:
         logging.info(f"Original model average rewards on testing set: {np.mean(filter_reward_list)}")
     else: 
         logging.info(f"Original model average rewards on testing set: None")
-    
-
     
 # If train_selected_indices is not empty, we will use the selected indices for training
 if train_selected_indices:
@@ -969,4 +790,135 @@ total_end_time = time.time()
 # Calculate total time taken
 total_time_taken = total_end_time - total_start_time
 logging.info(f"Total time taken for the entire process: {total_time_taken:.2f} seconds")
+
+
+# ### Plot
+
+# In[9]:
+
+
+import re
+import matplotlib.pyplot as plt
+import ast
+import numpy as np
+
+# Function to parse the log file for both EVAL and Original model metrics
+def parse_log_file(log_path):
+    eval_pattern = re.compile(
+        r"EVAL: Cosine_Sim metrics Training Set for iteration (\d+): (.+)"
+    )
+    original_model_pattern = re.compile(
+        r"Original model metrics on training set: (.+)"
+    )
+    
+    data = {"EVAL": {}, "Original": []}
+
+    # Read the log file line by line
+    with open(log_path, 'r') as log_file:
+        for line in log_file:
+            eval_match = eval_pattern.search(line)
+            original_match = original_model_pattern.search(line)
+
+            # If it's an EVAL line
+            if eval_match:
+                iteration = int(eval_match.group(1)) + 1  # Adding 1 to iteration as requested
+                metrics_list = eval_match.group(2).strip()
+
+                # Convert the metrics_list string to a Python object (list of dicts)
+                metrics_list = ast.literal_eval(metrics_list)
+
+                # Store means and std_devs for this iteration
+                means = []
+                std_devs = []
+                counts = []
+
+                for metrics in metrics_list:
+                    mean = metrics['metrics']['mean']
+                    std_dev = metrics['metrics']['std_dev']
+                    count = len(metrics['metrics']['rewards'])  # Number of rewards is the sample size
+
+                    means.append(mean)
+                    std_devs.append(std_dev)
+                    counts.append(count)
+
+                # Store mean, std_dev, and count for each iteration
+                data["EVAL"][iteration] = {
+                    "means": means,
+                    "std_devs": std_devs,
+                    "counts": counts
+                }
+
+            # If it's an Original Model Metrics line
+            elif original_match:
+                metrics_list = original_match.group(1).strip()
+
+                # Convert the metrics_list string to a Python object (list of dicts)
+                metrics_list = ast.literal_eval(metrics_list)
+
+                for metrics in metrics_list:
+                    mean = metrics['metrics']['mean']
+                    std_dev = metrics['metrics']['std_dev']
+                    data["Original"].append((mean, std_dev))
+
+    return data
+
+# Function to calculate the pooled standard deviation
+def pooled_std_dev(std_devs, counts):
+    # Pooled variance formula
+    numerator = sum((counts[i] - 1) * (std_devs[i] ** 2) for i in range(len(std_devs)))
+    denominator = sum(counts[i] - 1 for i in range(len(counts)))
+
+    if denominator > 0:
+        pooled_variance = numerator / denominator
+        return np.sqrt(pooled_variance)
+    else:
+        return 0  # In case of single value or no variance
+
+# Function to plot iteration vs the average mean and pooled std_dev
+def plot_metrics(data):
+    plt.figure(figsize=(10, 6))
+
+    # Plot EVAL data (average across all idx)
+    iterations = sorted(data["EVAL"].keys())
+    avg_means = []
+    pooled_std_devs = []
+
+    for iteration in iterations:
+        means = data["EVAL"][iteration]["means"]
+        std_devs = data["EVAL"][iteration]["std_devs"]
+        counts = data["EVAL"][iteration]["counts"]
+
+        # Calculate the average mean for the iteration
+        avg_mean = sum(means) / len(means)
+        avg_means.append(avg_mean)
+
+        # Calculate the pooled standard deviation for the iteration
+        pooled_std_dev_value = pooled_std_dev(std_devs, counts)
+        pooled_std_devs.append(pooled_std_dev_value)
+
+    # Plot the average means with pooled std_dev as error bars
+    plt.errorbar(iterations, avg_means, yerr=pooled_std_devs, fmt='o-', capsize=5, label='Average Mean with Pooled Std Dev')
+
+    # Plot Original Model data (if available)
+    if "Original" in data and len(data["Original"]) > 0:
+        original_means = [item[0] for item in data["Original"]]
+        original_std_devs = [item[1] for item in data["Original"]]
+        avg_original_mean = np.mean(original_means)
+        pooled_original_std_dev = pooled_std_dev(original_std_devs, [10] * len(original_std_devs))  # Assuming 10 samples per idx
+
+        plt.errorbar([0], [avg_original_mean], yerr=[pooled_original_std_dev], fmt='x', color='r', label='Original Model Average Mean')
+
+    plt.xlabel('Iteration')
+    plt.ylabel('Mean')
+    plt.title('Iteration vs Average Mean with Pooled Std Dev')
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+
+# Parse the log file
+data = parse_log_file(log_path)
+
+# Plot the metrics
+plot_metrics(data)
 
