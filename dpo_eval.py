@@ -402,9 +402,13 @@ def eval_dpo_token_length(
 #     # return trained_model_metrics, trained_model_rewards, trained_model_even_percent, trained_model_even_total
 
 def eval_dpo_mos(
-            ar_checkpoint, # checkpoint for the AR model
-            nar_checkpoint, # checkpoint for the NAR model
-            trained_model_checkpoint, # path checkpoint for the trained model
+            # ar_checkpoint, # checkpoint for the AR model
+            # nar_checkpoint, # checkpoint for the NAR model
+            # trained_model_checkpoint, # path checkpoint for the trained model
+            nar_model,
+            ar_tokenizer,
+            nar_tokenizer,
+            trained_model,
             args_predict, # arguments for the prediction
             all_src_encodec,
             all_instruction,
@@ -415,8 +419,8 @@ def eval_dpo_mos(
             device = "cuda" if torch.cuda.is_available() else "cpu"
             ):
     # load models and tokenizer
-    nar_model, ar_tokenizer, nar_tokenizer = load_models_and_tokenizers(ar_checkpoint, nar_checkpoint)
-    trained_model = BartForConditionalGeneration.from_pretrained(trained_model_checkpoint, return_dict=True)
+    # nar_model, ar_tokenizer, nar_tokenizer = load_models_and_tokenizers(ar_checkpoint, nar_checkpoint)
+    # trained_model = BartForConditionalGeneration.from_pretrained(trained_model_checkpoint, return_dict=True)
     trained_model.to(device)
     # List for storing rewards
     all_data_metrics = []

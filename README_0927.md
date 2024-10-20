@@ -20,3 +20,7 @@ Don't save the model output
 ### Plot
 1. std error
 2. max and min
+
+### Exp Todos
+1. train / test set difference (5 fixed / 5 fixed), eval freq = 5
+2. train / test set difference (5 random / 5 fixed), eval freq = 5
