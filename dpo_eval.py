@@ -75,7 +75,7 @@ def get_reward_mos(output_path, base_path):
         "csv_file": None,
         "csv_deg": None,
         "num_workers": 6, ## original 0
-        "bs": 40, # original 1
+        "bs": 16, # original 1 / 40 
         "ms_channel": None,
         'ms_max_segments':3000
     }

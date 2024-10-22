@@ -3,7 +3,7 @@
 
 # ### Import Libraries
 
-# In[14]:
+# In[1]:
 
 
 import sys
@@ -30,6 +30,7 @@ from typing import List, Tuple
 import random
 import argparse
 import soundfile as sf
+import math
 
 sys.path.append('/work/b0990106x/trl/CLAPS')
 from CLAPS.inference import load_model
@@ -256,25 +257,36 @@ def process_data_batch(sample_size: int,
         valid_outputs = [tokenized_outputs[j] for j in range(len(rewards)) if rewards[j] is not None]
 
         if len(valid_rewards) >= 2:
-            max_reward_index = np.argmax(valid_rewards)
-            min_reward_index = np.argmin(valid_rewards)
+            # max_reward_index = np.argmax(valid_rewards)
+            # min_reward_index = np.argmin(valid_rewards)
+            
+            # choose first 20% of the data and last 20% of the data 
+            twenty_percent_num = math.ceil(len(valid_rewards) * 0.2)
+            max_reward_indexs = np.argsort(valid_rewards)[-twenty_percent_num:]
+            min_reward_indexs = np.argsort(valid_rewards)[:twenty_percent_num]
+            
             average_reward = np.mean(valid_rewards)
-            chosen_output = valid_outputs[max_reward_index]
-            rejected_output = valid_outputs[min_reward_index]
-            # add <s> and </s> to the chosen_output and rejected_output
-            # chosen_output = "<s> " + chosen_output + " </s>"
-            # rejected_output = "<s> " + rejected_output + " </s>"
+            # chosen_output = valid_outputs[max_reward_index]
+            # rejected_output = valid_outputs[min_reward_index]
+            
+            chosen_outputs = [valid_outputs[j] for j in max_reward_indexs]
+            rejected_outputs = [valid_outputs[j] for j in min_reward_indexs]
 
             obs_input = pack_inputs_v2(ar_tokenizer, selected_src_encodec[i], selected_instruction[i])
             tokenize_input = ar_tokenizer.convert_ids_to_tokens(obs_input)
             tokenize_input_str = ar_tokenizer.convert_tokens_to_string(tokenize_input)
             prompts.append(tokenize_input_str)
 
-            chosen.append(chosen_output)
-            chosen_rewards.append(valid_rewards[max_reward_index])
-            rejected.append(rejected_output)
-            rejected_rewards.append(valid_rewards[min_reward_index])
+            # chosen.append(chosen_output)
+            # chosen_rewards.append(valid_rewards[max_reward_index])
+            # rejected.append(rejected_output)
+            # rejected_rewards.append(valid_rewards[min_reward_index])
             average_rewards.append(average_reward)
+            
+            chosen.extend(chosen_outputs)
+            chosen_rewards.extend([valid_rewards[j] for j in max_reward_indexs])
+            rejected.extend(rejected_outputs)
+            rejected_rewards.extend([valid_rewards[j] for j in min_reward_indexs])
         else:
             print(f"Not enough valid rewards for data index {i}")
 
@@ -444,7 +456,7 @@ def train_iteration(model,
 
 # ### Hyperparameters
 
-# In[18]:
+# In[ ]:
 
 
 # Load all data
@@ -507,7 +519,7 @@ print(f"length of all_src_encodec: {len(selected_src_encodec)}") # ~ 9000 data
 print(f"length of all_instruction: {len(selected_instruction)}") # ~ 9000 data
 
 
-# In[19]:
+# In[ ]:
 
 
 sr = 24000
@@ -541,7 +553,7 @@ a = argparse.Namespace(
 clap_model, accelerator = load_model(a)
 
 
-# In[20]:
+# In[ ]:
 
 
 print(f"num_iterations: {num_iterations}")
@@ -598,7 +610,7 @@ nar_tokenizer = AutoTokenizer.from_pretrained(nar_checkpoint)
 
 # ### Logging Start
 
-# In[22]:
+# In[ ]:
 
 
 import logging
@@ -648,7 +660,7 @@ logging.info(
 
 # ### Initial Setup
 
-# In[23]:
+# In[ ]:
 
 
 # Start time
@@ -784,7 +796,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 # ### Start training iterations
 
-# In[25]:
+# In[ ]:
 
 
 disable_tqdm = not os.isatty(1)
