@@ -1,5 +1,7 @@
 ### Entry point
-`dpo_claps.ipynb`
+* `dpo_claps.ipynb` (base)
+* `dpo_claps_optimized_io.ipynb` (optimized IO version)
+* `dpo_claps_mos` (Claps + MOS version)
 
 related files:
 `dpo_eval.py`, `vc/`

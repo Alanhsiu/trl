@@ -74,8 +74,8 @@ def get_reward_mos(output_path, base_path):
         "output_dir": f"{base_path}/NISQA/result/",
         "csv_file": None,
         "csv_deg": None,
-        "num_workers": 0,
-        "bs": 1,
+        "num_workers": 6, ## original 0
+        "bs": 40, # original 1
         "ms_channel": None,
         'ms_max_segments':3000
     }
