@@ -38,7 +38,7 @@ from CLAPS.inference import load_model
 
 # ### Utility Functions
 
-# In[15]:
+# In[2]:
 
 
 def set_seed(seed):
@@ -52,7 +52,7 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
 
 
-# In[16]:
+# In[3]:
 
 
 def generate_output_batch(
@@ -202,7 +202,7 @@ def train_model(
     # ar_tokenizer.save_pretrained(f"{model_output_dir}/dpo_model")
 
 
-# In[17]:
+# In[4]:
 
 
 def process_data_batch(sample_size: int, 
@@ -261,7 +261,7 @@ def process_data_batch(sample_size: int,
             # min_reward_index = np.argmin(valid_rewards)
             
             # choose first 20% of the data and last 20% of the data 
-            twenty_percent_num = math.ceil(len(valid_rewards) * 0.2)
+            twenty_percent_num = math.ceil(len(valid_rewards)/2 * 0.2)
             max_reward_indexs = np.argsort(valid_rewards)[-twenty_percent_num:]
             min_reward_indexs = np.argsort(valid_rewards)[:twenty_percent_num]
             
@@ -275,7 +275,9 @@ def process_data_batch(sample_size: int,
             obs_input = pack_inputs_v2(ar_tokenizer, selected_src_encodec[i], selected_instruction[i])
             tokenize_input = ar_tokenizer.convert_ids_to_tokens(obs_input)
             tokenize_input_str = ar_tokenizer.convert_tokens_to_string(tokenize_input)
-            prompts.append(tokenize_input_str)
+            # prompts.append(tokenize_input_str)
+            prompts.extend([tokenize_input_str] * len(chosen_outputs))
+
 
             # chosen.append(chosen_output)
             # chosen_rewards.append(valid_rewards[max_reward_index])
@@ -456,7 +458,7 @@ def train_iteration(model,
 
 # ### Hyperparameters
 
-# In[ ]:
+# In[5]:
 
 
 # Load all data
@@ -486,7 +488,7 @@ nar_checkpoint = "lca0503/speech-chatgpt-base-nar-v2-epoch4-wotrans"
 
 # Models and Iterations
 model_checkpoint = ar_checkpoint # Prepare: set the initial model checkpoint
-sample_size = 10 # Prepare Dataset: generate how many outputs to select max and min for chosen and rejected (original: 10)
+sample_size = 80 # Prepare Dataset: generate how many outputs to select max and min for chosen and rejected (original: 10)
 num_iterations = 1000  # Training: train how many iterations (original: 100)
 train_selected_indices = [8]
 # train_selected_indices = [9]
@@ -497,7 +499,7 @@ data_size_per_iteration = len(train_selected_indices) # Training: each iteration
 # Define Training Configuration
 beta = 0.1 # Training: beta value for DPO
 learning_rate = 5e-07 # Training: learning rate (original: 5e-07)
-num_train_epochs = 3 # Training: number of training epochs (original: 3)
+num_train_epochs = 1 # Training: number of training epochs (original: 3)
 max_length = 1024*9 # Training: max length of the model
 max_prompt_length = 1024*9 # Training: max length of the prompt
 max_target_length = 1024*9 # Training: max length of the target
@@ -511,7 +513,7 @@ eval_train_indices = train_selected_indices # Evaluation: evaluate on training d
 eval_test_indices = random.sample(range(len(selected_src_encodec)), 5) # Evaluation: evaluate on testing data indicies from all_src_encodec
 eval_train_data_len = 1000 # Evaluation: evaluate how many training data
 eval_test_data_len = len(eval_test_indices) # Evaluation: evaluate how many testing data
-num_eval = 10 # Evaluation: evaluate how many times per data (original: 10)
+num_eval = 1 # Evaluation: evaluate how many times per data (original: 10)
 eval_frequency = 1 # Evaluation: evaluate every how many iterations
 # Define temperature
 # eval_selected_indices = random.sample(range(len(all_src_encodec)), eval_data_len) # Evaluation: select 10 data for evaluation
@@ -519,7 +521,7 @@ print(f"length of all_src_encodec: {len(selected_src_encodec)}") # ~ 9000 data
 print(f"length of all_instruction: {len(selected_instruction)}") # ~ 9000 data
 
 
-# In[ ]:
+# In[6]:
 
 
 sr = 24000
@@ -553,7 +555,7 @@ a = argparse.Namespace(
 clap_model, accelerator = load_model(a)
 
 
-# In[ ]:
+# In[7]:
 
 
 print(f"num_iterations: {num_iterations}")
@@ -597,7 +599,7 @@ if eval_train:
 
 # ### Load Models
 
-# In[21]:
+# In[8]:
 
 
 model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(model_checkpoint, return_dict=True)
@@ -610,7 +612,7 @@ nar_tokenizer = AutoTokenizer.from_pretrained(nar_checkpoint)
 
 # ### Logging Start
 
-# In[ ]:
+# In[9]:
 
 
 import logging
@@ -660,7 +662,7 @@ logging.info(
 
 # ### Initial Setup
 
-# In[ ]:
+# In[10]:
 
 
 # Start time
@@ -783,20 +785,22 @@ else:
     logging.info(f"Processing data from index {start_idx} to {end_idx}")
 
 
-# In[24]:
+# In[11]:
 
 
 import warnings
 
 # warnings.filterwarnings("ignore")
-
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
+
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 # ### Start training iterations
 
-# In[ ]:
+# In[12]:
 
 
 disable_tqdm = not os.isatty(1)
