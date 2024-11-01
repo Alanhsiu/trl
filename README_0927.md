@@ -24,5 +24,9 @@ Don't save the model output
 2. max and min
 
 ### Exp Todos
-1. train / test set difference (5 fixed / 5 fixed), eval freq = 5
-2. train / test set difference (5 random / 5 fixed), eval freq = 5
+1. CLaps: train / test set difference (5 fixed / 5 fixed), eval freq = 5
+2. CLaps+MOS: train / test set difference (5 fixed / 5 fixed), eval freq = 5
+
+### Notes
+1. use another mos reward 
+2. ut mos reward

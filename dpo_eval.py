@@ -89,9 +89,10 @@ def get_reward_mos(output_path, base_path):
         return reward
     except Exception as e:
         print("Error:", e)
-        print("get_reward function end ___________________________")
+        print("get_reward_mos failed")
         # raise
-        return None
+        # return None
+        return 0
 
 def get_reward_length(token_list):
     # count the length of the token list
