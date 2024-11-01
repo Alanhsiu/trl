@@ -1,0 +1,3 @@
+[submodule "UTMOSv2"]
+	path = UTMOSv2
+	url = https://github.com/Alanhsiu/UTMOSv2.git
