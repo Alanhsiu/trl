@@ -1,6 +1,6 @@
 ### Entry point
-* `dpo_claps.ipynb` (base)
-* `dpo_claps_optimized_io.ipynb` (optimized IO version)
+* `dpo_claps.ipynb` (base) -> backup on 11/1
+* `dpo_claps_optimized_io.ipynb` (optimized IO version) -> rename to `dpo_claps.ipynb` on 11/1
 * `dpo_claps_mos` (Claps + MOS version)
 
 related files:
