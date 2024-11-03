@@ -3,7 +3,7 @@ import importlib
 import torch
 from types import SimpleNamespace
 from transformers import BartForConditionalGeneration, AutoTokenizer
-from NISQA.nisqa.NISQA_model import nisqaModel
+# from NISQA.nisqa.NISQA_model import nisqaModel
 from datasets import load_from_disk
 from vc.trainer_encodec_vc_inference import get_ar_prediction_v3, get_ar_prediction_for_data, get_ar_prediction_get_audio, get_ar_prediction_audio_batch
 from vc.encodec_model.nar_bart_model import NARBartForConditionalGeneration
@@ -17,7 +17,6 @@ import random
 sys.path.append('/work/b0990106x/trl/CLAPS')
 from CLAPS.inference import infer
 
-# Print current path
 sys.path.append("/work/b0990106x/trl/vc")
 import vc
 importlib.reload(vc)
@@ -65,34 +64,37 @@ def convert_array_to_tensor_format(audio_array):
     tensor_audio = torch.tensor(audio_array, dtype=torch.float32)    
     return [tensor_audio]
 
-def get_reward_mos(output_path, base_path):
-    args_nisqa = {
-        "mode": "predict_file",
-        "pretrained_model": f"{base_path}/NISQA/weights/nisqa.tar",
-        "deg": output_path,
-        "data_dir": None,
-        "output_dir": f"{base_path}/NISQA/result/",
-        "csv_file": None,
-        "csv_deg": None,
-        "num_workers": 6, ## original 0
-        "bs": 16, # original 1 / 40 
-        "ms_channel": None,
-        'ms_max_segments':3000
-    }
-    args_nisqa["tr_bs_val"] = args_nisqa["bs"]
-    args_nisqa["tr_num_workers"] = args_nisqa["num_workers"]
-    nisqa = nisqaModel(args_nisqa)
-    try:
-        prediction = nisqa.predict()
-        reward = float(prediction["mos_pred"].iloc[0])
-        # print("Reward:", reward)
-        return reward
-    except Exception as e:
-        print("Error:", e)
-        print("get_reward_mos failed")
-        # raise
-        # return None
-        return 0
+# def get_reward_mos(output_path, base_path):
+#     args_nisqa = {
+#         "mode": "predict_file",
+#         "pretrained_model": f"{base_path}/NISQA/weights/nisqa.tar",
+#         "deg": output_path,
+#         "data_dir": None,
+#         "output_dir": f"{base_path}/NISQA/result/",
+#         "csv_file": None,
+#         "csv_deg": None,
+#         "num_workers": 6, ## original 0
+#         "bs": 16, # original 1 / 40 
+#         "ms_channel": None,
+#         'ms_max_segments':3000
+#     }
+#     args_nisqa["tr_bs_val"] = args_nisqa["bs"]
+#     args_nisqa["tr_num_workers"] = args_nisqa["num_workers"]
+#     nisqa = nisqaModel(args_nisqa)
+#     try:
+#         prediction = nisqa.predict()
+#         reward = float(prediction["mos_pred"].iloc[0])
+#         # print("Reward:", reward)
+#         return reward
+#     except Exception as e:
+#         print("Error:", e)
+#         print("get_reward_mos failed")
+#         # raise
+#         # return None
+#         return 0
+
+def get_reward_mos(file_path, utmos_model):
+    return utmos_model.predict(input_path=file_path, verbose=False)
 
 def get_reward_length(token_list):
     # count the length of the token list
@@ -168,9 +170,10 @@ def get_reward_even_token(token_list):
     total = even_count
     return reward, percent, total
 
-def process_and_get_mos_reward(model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, episode_counter=0, base_path="/work/b0990106x/trl", temperature = 1.0):
+def process_and_get_mos_reward(model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, utmos_model, episode_counter=0, temperature = 1.0):
     _, _, output_path_ckpt = get_ar_prediction_v3(args_predict, model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature = temperature)
-    reward = get_reward_mos(output_path_ckpt, base_path)
+    # reward = utmos_model.predict(input_path=output_path_ckpt)
+    reward = get_reward_mos(file_path=output_path_ckpt, utmos_model=utmos_model)
     return reward
 
 # def process_and_get_claps_reward(model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, episode_counter=0, base_path="/work/b0990106x/trl", temperature = 1.0):
@@ -410,6 +413,7 @@ def eval_dpo_mos(
             ar_tokenizer,
             nar_tokenizer,
             trained_model,
+            utmos_model,
             args_predict, # arguments for the prediction
             all_src_encodec,
             all_instruction,
@@ -449,9 +453,7 @@ def eval_dpo_mos(
         if size_of_packed_input <= 1024 and size_of_packed_input > 4:
             rewards = []
             for j in range(num_evaluations):
-                # Process with trained model
-                trained_model_reward = process_and_get_mos_reward(trained_model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, episode_counter=f"eval_{iteration}_data_{idx}_{j}")
-                # print(f"Trained model reward: {trained_model_reward}")
+                trained_model_reward = process_and_get_mos_reward(trained_model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, utmos_model, episode_counter=f"eval_{iteration}_data_{idx}_{j}")
                 rewards.append(trained_model_reward)
 
             filtered_trained_model_rewards = [r for r in rewards if r is not None]
