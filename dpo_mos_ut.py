@@ -31,6 +31,9 @@ import soundfile as sf
 import math
 import tempfile
 from pathlib import Path
+import utmosv2
+import shutil
+
 
 sys.path.append('/work/b0990106x/trl/CLAPS')
 
@@ -71,48 +74,81 @@ def generate_output_batch(
 ) -> tuple[float, str]:
     
     # Generate predictions using the AR model
+    start_time = time.time()
     audio_list, decode_ar_list = get_ar_prediction_audio_batch(
         args_predict, model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature=temperature
     )
+    print(f"Time taken for generating predictions: {time.time() - start_time} seconds")
     
     reward_list = []
     valid_audio_paths = []
-
-    # for i, audio in enumerate(audio_list): 
-    #     # audio ---> tensor([])
-    #     if audio is not None:
-    #         output_path_ckpt = args_predict.output_path.replace(".wav", f"_generate_{episode_counter}_item_{i}.wav")
-    #         sf.write(output_path_ckpt, np.ravel(audio), samplerate=24000)
-    #         # reward_mos = get_reward_mos(file_path=output_path_ckpt, utmos_model=utmos_model)
-    #         reward_mos = utmos_model.predict(input_path=output_path_ckpt, verbose=False)
-    #         reward = reward_mos / 5
-    #     else: 
-    #         reward = 0
-    #     reward_list.append(reward)
     
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_dir_path = Path(temp_dir)
+    # start_time = time.time()
+    # with tempfile.TemporaryDirectory() as temp_dir:
+    #     temp_dir_path = Path(temp_dir)
         
-        for i, audio in enumerate(audio_list): 
-            if audio is not None:
-                output_path_ckpt = temp_dir_path / f"generate_{episode_counter}_item_{i}.wav"
-                sf.write(output_path_ckpt, np.ravel(audio), samplerate=24000)
-                valid_audio_paths.append(output_path_ckpt)
-            else: 
-                reward_list.append(0)
+    #     start_eval_time = time.time()
+    #     for i, audio in enumerate(audio_list): 
+    #         if audio is not None:
+    #             output_path_ckpt = temp_dir_path / f"generate_{episode_counter}_item_{i}.wav"
+    #             sf.write(output_path_ckpt, np.ravel(audio), samplerate=24000)
+    #             valid_audio_paths.append(output_path_ckpt)
+    #         else: 
+    #             reward_list.append(0)
+    #     print(f"Time taken for writing audio files: {time.time() - start_eval_time} seconds")
         
-        if valid_audio_paths:
-            mos_predictions = utmos_model.predict(
-                input_dir=temp_dir_path, 
-                verbose=False,
-                batch_size=16
-            )
+    #     start_predict_time = time.time()
+    #     print(f"Length of valid audio paths: {len(valid_audio_paths)}")
+    #     if valid_audio_paths:
+    #         mos_predictions = utmos_model.predict(
+    #             input_dir=temp_dir_path, 
+    #             verbose=False,
+    #             batch_size=32,
+    #             num_workers=32
+    #         )
             
-            for mos in mos_predictions:
-                predicted_mos = mos.get("predicted_mos", 0) 
-                reward = predicted_mos / 5
-                reward_list.append(reward)
+    #         for mos in mos_predictions:
+    #             predicted_mos = mos.get("predicted_mos", 0) 
+    #             reward = predicted_mos / 5
+    #             reward_list.append(reward)
+    #     print(f"Time taken for predicting MOS: {time.time() - start_predict_time} seconds")
+    # print(f"Time taken for evaluating predictions: {time.time() - start_time} seconds")
     
+    start_time = time.time()
+
+    temp_dir_path = Path("/dev/shm/temp_audio_files")
+    temp_dir_path.mkdir(parents=True, exist_ok=True)
+
+    start_eval_time = time.time()
+    for i, audio in enumerate(audio_list): 
+        if audio is not None:
+            output_path_ckpt = temp_dir_path / f"generate_{episode_counter}_item_{i}.wav"
+            sf.write(output_path_ckpt, np.ravel(audio), samplerate=24000)
+            valid_audio_paths.append(output_path_ckpt)
+        else: 
+            reward_list.append(0)
+    print(f"Time taken for writing audio files: {time.time() - start_eval_time} seconds")
+
+    start_predict_time = time.time()
+    print(f"Length of valid audio paths: {len(valid_audio_paths)}")
+    if valid_audio_paths:
+        mos_predictions = utmos_model.predict(
+            input_dir=temp_dir_path, 
+            verbose=False,
+            batch_size=32,
+            num_workers=32
+        )
+
+        for mos in mos_predictions:
+            predicted_mos = mos.get("predicted_mos", 0) 
+            reward = predicted_mos / 5
+            reward_list.append(reward)
+    print(f"Time taken for predicting MOS: {time.time() - start_predict_time} seconds")
+
+    print(f"Time taken for evaluating predictions: {time.time() - start_time} seconds")
+
+    shutil.rmtree(temp_dir_path)
+        
     tokenized_decode_ar_list = []
     for decode_ar in decode_ar_list:
         list_decode_ar = decode_ar.flatten().tolist()   
@@ -360,7 +396,7 @@ def train_iteration(model,
     val_dataset = dataset_dict["test"]
     
     # print train_dataset and val_dataset
-    if iteration < 2:
+    if iteration < 1:
         print("train_dataset", train_dataset.to_dict())
         print("val_dataset", val_dataset.to_dict())
 
@@ -434,9 +470,8 @@ train_selected_indices = [8]
 data_size_per_iteration = len(train_selected_indices) # Training: each iteration will train how many data
 
 # Define Training Configuration
-beta = 0.1 # Training: beta value for DPO
-# learning_rate = 5e-06 # Training: learning rate (original: 5e-07)
-learning_rate = 5e-08 # Training: learning rate (original: 5e-07)
+beta = 0.5 # Training: beta value for DPO (original: 0.1)
+learning_rate = 5e-07 # Training: learning rate (original: 5e-07)
 num_train_epochs = 3 # Training: number of training epochs (original: 3)
 max_length = 1024*9 # Training: max length of the model
 max_prompt_length = 1024*9 # Training: max length of the prompt
@@ -504,6 +539,8 @@ if eval_train:
 # In[ ]:
 
 
+start_time = time.time()
+
 model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(model_checkpoint, return_dict=True)
 ar_model = BartForConditionalGeneration.from_pretrained(ar_checkpoint)
 ar_tokenizer = AutoTokenizer.from_pretrained(ar_checkpoint)
@@ -511,9 +548,11 @@ ar_tokenizer = AutoTokenizer.from_pretrained(ar_checkpoint)
 nar_model = NARBartForConditionalGeneration.from_pretrained(nar_checkpoint)
 nar_tokenizer = AutoTokenizer.from_pretrained(nar_checkpoint)
 
-import utmosv2
 utmos_checkpoint_path = "UTMOSv2/models/fusion_stage3/fold0_s42_best_model.pth"
 utmos_model = utmosv2.create_model(pretrained=True, checkpoint_path=utmos_checkpoint_path)
+
+end_time = time.time()
+print(f"Time taken to load models: {end_time - start_time} seconds")
 
 
 # ### Logging Start
