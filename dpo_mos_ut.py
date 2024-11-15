@@ -223,19 +223,22 @@ def train_model(
 # In[ ]:
 
 
-def process_data_batch(sample_size: int, 
-                       model,
-                        nar_model, 
-                        ar_tokenizer, 
-                        nar_tokenizer, 
-                        utmos_model,
-                        selected_src_encodec: List[list], 
-                        selected_instruction: List[str],
-                        args_predict: SimpleNamespace, 
-                        temperature: float = 1.0, 
-                        iteration: int = 0
+def process_data_batch(
+    sample_size: int, 
+    model,
+    nar_model, 
+    ar_tokenizer, 
+    nar_tokenizer, 
+    utmos_model,
+    selected_src_encodec: List[list], 
+    selected_instruction: List[str],
+    args_predict: SimpleNamespace, 
+    temperature: float = 1.0, 
+    iteration: int = 0,
+    prev_eval_avg: float = 0,
+    strategy: str = "above_prev_eval"  # Options: "top_bottom_percent" or "above_below_average" or "above_prev_eval"
 ) -> Tuple[List[str], List[str], List[str], List[float], List[float], List[float]]:
-    # If sample size is 1, we cannot choose the best and worst outputs
+
     if sample_size < 2:
         raise ValueError("Parameter 'sample_size' must be greater than 1.")
 
@@ -249,15 +252,15 @@ def process_data_batch(sample_size: int,
             3
         )
         if 4 < size_of_packed_input <= 1024:
-            selected_src_encodec_list = [selected_src_encodec[i]]*sample_size
-            selected_instruction_list = [selected_instruction[i]]*sample_size
+            selected_src_encodec_list = [selected_src_encodec[i]] * sample_size
+            selected_instruction_list = [selected_instruction[i]] * sample_size
             rewards, tokenized_outputs = generate_output_batch(
                 model=model,
                 nar_model=nar_model, 
                 ar_tokenizer=ar_tokenizer, 
                 nar_tokenizer=nar_tokenizer,
                 utmos_model=utmos_model,
-                src_encodec = selected_src_encodec_list,
+                src_encodec=selected_src_encodec_list,
                 instruction=selected_instruction_list, 
                 args_predict=args_predict,
                 episode_counter=f"data_{i}",
@@ -268,28 +271,75 @@ def process_data_batch(sample_size: int,
         valid_outputs = [tokenized_outputs[j] for j in range(len(rewards)) if rewards[j] is not None]
 
         if len(valid_rewards) >= 2:
-            # choose first 20% of the data and last 20% of the data 
-            twenty_percent_num = math.ceil(len(valid_rewards)/2 * 0.2)
-            max_reward_indexs = np.argsort(valid_rewards)[-twenty_percent_num:]
-            min_reward_indexs = np.argsort(valid_rewards)[:twenty_percent_num]
             average_reward = np.mean(valid_rewards)
-            chosen_outputs = [valid_outputs[j] for j in max_reward_indexs]
-            rejected_outputs = [valid_outputs[j] for j in min_reward_indexs]
+            print(f"Average reward for data index {i}: {average_reward}")
+            print(f"All rewards for data index {i}: {valid_rewards}")
+
+            if strategy == "top_bottom_percent":
+                twenty_percent_num = math.ceil(len(valid_rewards) * 0.2)
+                max_reward_indexs = np.argsort(valid_rewards)[-twenty_percent_num:]
+                min_reward_indexs = np.argsort(valid_rewards)[:twenty_percent_num]
+
+                chosen_outputs = [valid_outputs[j] for j in max_reward_indexs]
+                rejected_outputs = [valid_outputs[j] for j in min_reward_indexs]
+                chosen_rewards_part = [valid_rewards[j] for j in max_reward_indexs]
+                rejected_rewards_part = [valid_rewards[j] for j in min_reward_indexs]
+
+            elif strategy == "above_below_average":
+                threshold = 0.05
+                chosen_outputs = [valid_outputs[j] for j in range(len(valid_rewards)) if valid_rewards[j] > average_reward + threshold]
+                rejected_outputs = [valid_outputs[j] for j in range(len(valid_rewards)) if valid_rewards[j] < average_reward - threshold]
+                
+                chosen_outputs = [x for _, x in sorted(zip(valid_rewards, chosen_outputs), reverse=True)]
+                rejected_outputs = [x for _, x in sorted(zip(valid_rewards, rejected_outputs))]
+                
+                min_length = min(len(chosen_outputs), len(rejected_outputs))
+                chosen_outputs = chosen_outputs[:min_length]
+                rejected_outputs = rejected_outputs[:min_length]
+                
+                chosen_rewards_part = [valid_rewards[j] for j in range(len(valid_rewards)) if valid_rewards[j] > average_reward][:min_length]
+                rejected_rewards_part = [valid_rewards[j] for j in range(len(valid_rewards)) if valid_rewards[j] < average_reward][:min_length]
+                
+            elif strategy == "above_prev_eval":
+                chosen_outputs = [valid_outputs[j] for j in range(len(valid_rewards)) if valid_rewards[j] > prev_eval_avg]
+                rejected_outputs = [valid_outputs[j] for j in range(len(valid_rewards)) if valid_rewards[j] < prev_eval_avg]
+                
+                # Sort and trim
+                chosen_outputs = [x for _, x in sorted(zip(valid_rewards, chosen_outputs), reverse=True)]
+                rejected_outputs = [x for _, x in sorted(zip(valid_rewards, rejected_outputs))]
+
+                min_length = min(len(chosen_outputs), len(rejected_outputs))
+                print(f"prev_eval_avg: {prev_eval_avg}, min_length: {min_length}", " chosen_outputs: ", len(chosen_outputs), " rejected_outputs: ", len(rejected_outputs))
+                if min_length == 0:
+                    # Ensure at least one in chosen and one in rejected
+                    chosen_outputs = [valid_outputs[np.argmax(valid_rewards)]]
+                    rejected_outputs = [valid_outputs[np.argmin(valid_rewards)]]
+                    chosen_rewards_part = [valid_rewards[np.argmax(valid_rewards)]]
+                    rejected_rewards_part = [valid_rewards[np.argmin(valid_rewards)]]
+                else:
+                    # Trim to equal lengths
+                    twenty_percent_num = math.ceil(len(valid_rewards) * 0.2)
+                    min_length = min(min_length, twenty_percent_num)
+                    
+                    chosen_outputs = chosen_outputs[:min_length]
+                    rejected_outputs = rejected_outputs[:min_length]
+                    chosen_rewards_part = [valid_rewards[j] for j in range(len(valid_rewards)) if valid_rewards[j] > prev_eval_avg][:min_length]
+                    rejected_rewards_part = [valid_rewards[j] for j in range(len(valid_rewards)) if valid_rewards[j] < prev_eval_avg][:min_length]
+
 
             obs_input = pack_inputs_v2(ar_tokenizer, selected_src_encodec[i], selected_instruction[i])
             tokenize_input = ar_tokenizer.convert_ids_to_tokens(obs_input)
             tokenize_input_str = ar_tokenizer.convert_tokens_to_string(tokenize_input)
             prompts.extend([tokenize_input_str] * len(chosen_outputs))
             average_rewards.append(average_reward)
-            
+
             chosen.extend(chosen_outputs)
-            chosen_rewards.extend([valid_rewards[j] for j in max_reward_indexs])
             rejected.extend(rejected_outputs)
-            rejected_rewards.extend([valid_rewards[j] for j in min_reward_indexs])
+            chosen_rewards.extend(chosen_rewards_part)
+            rejected_rewards.extend(rejected_rewards_part)
         else:
             print(f"Not enough valid rewards for data index {i}")
 
-    # If there is only one data, we need to double the data because we need it for training set and validation set
     if len(selected_src_encodec) == 1:
         chosen *= 2
         rejected *= 2
@@ -297,21 +347,23 @@ def process_data_batch(sample_size: int,
         chosen_rewards *= 2
         rejected_rewards *= 2
         average_rewards *= 2    
-    
+
     return chosen, rejected, prompts, chosen_rewards, rejected_rewards, average_rewards
 
+
 def generate_data(model,
-                  ar_tokenizer, 
-                  nar_model, 
-                  nar_tokenizer, 
-                  utmos_model,
-                  selected_src_encodec: List[list], 
-                  selected_instruction: List[str],
-                  args_predict: SimpleNamespace, 
-                  sample_size: int, 
-                  iteration: int, 
-                  agent_output_dir: str, 
-                  temperature: float = 1.0
+                ar_tokenizer, 
+                nar_model, 
+                nar_tokenizer, 
+                utmos_model,
+                selected_src_encodec: List[list], 
+                selected_instruction: List[str],
+                args_predict: SimpleNamespace, 
+                sample_size: int, 
+                iteration: int, 
+                agent_output_dir: str, 
+                temperature: float = 1.0,
+                prev_eval_avg: float = 0
 ) -> Tuple[dict, List[float], List[float]]:
     
     chosen, rejected, prompts, chosen_rewards, rejected_rewards, average_rewards = process_data_batch(
@@ -325,7 +377,8 @@ def generate_data(model,
         selected_instruction=selected_instruction,
         args_predict=args_predict,
         temperature=temperature,
-        iteration = iteration
+        iteration = iteration,
+        prev_eval_avg = prev_eval_avg
     )
 
     data = {
@@ -369,6 +422,7 @@ def train_iteration(model,
                     per_device_train_batch_size = 1,
                     gradient_accumulation_steps = 1,
                     seed = 42,
+                    prev_eval_avg = 0
 ):
 
     selected_src_encodec = all_src_encodec[:data_size]
@@ -387,7 +441,8 @@ def train_iteration(model,
                                                                     sample_size=sample_size,
                                                                     iteration=iteration,
                                                                     agent_output_dir=agent_output_dir,
-                                                                    temperature=temperature)
+                                                                    temperature=temperature,
+                                                                    prev_eval_avg=prev_eval_avg)
     print(f"generate data time: {time.time() - start_time}")
 
     dataset = Dataset.from_dict(data_for_dataset)
@@ -470,14 +525,14 @@ train_selected_indices = [8]
 data_size_per_iteration = len(train_selected_indices) # Training: each iteration will train how many data
 
 # Define Training Configuration
-beta = 0.5 # Training: beta value for DPO (original: 0.1)
-learning_rate = 5e-07 # Training: learning rate (original: 5e-07)
+beta = 0.1 # Training: beta value for DPO (original: 0.1)
+learning_rate = 5e-06 # Training: learning rate (original: 5e-07)
 num_train_epochs = 3 # Training: number of training epochs (original: 3)
-max_length = 1024*9 # Training: max length of the model
-max_prompt_length = 1024*9 # Training: max length of the prompt
-max_target_length = 1024*9 # Training: max length of the target
-per_device_train_batch_size = 8 # Training: batch size (original: 1)
-gradient_accumulation_steps = 1 # Training: gradient accumulation steps
+max_length = 1024*9 # Training: max length of the model (original: 1024*9)
+max_prompt_length = 1024*9 # Training: max length of the prompt (original: 1024*9)
+max_target_length = 1024*9 # Training: max length of the target (original: 1024*9)
+per_device_train_batch_size = 1 # Training: batch size (original: 1)
+gradient_accumulation_steps = 8 # Training: gradient accumulation steps (original: 1)
 
 # Evaluation Configuration
 eval_train = True # Evaluation: evaluate on training data or not
@@ -616,9 +671,12 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 from transformers import logging
 logging.set_verbosity_error()
+
+prev_eval_avg = -1000
 
 
 # In[ ]:
@@ -668,12 +726,14 @@ def evaluate_model(eval_type, eval_data_len, eval_indices):
     # Calculate and log weighted reward
     weighted_reward = np.mean(filter_reward_list_mos) / 5 if filter_reward_list_mos else None
     logging.info(f"Original model weighted average rewards on {eval_type} set: {weighted_reward}")
+    prev_eval_avg = weighted_reward
+    return prev_eval_avg
 
 if eval_train:
-    evaluate_model(eval_type="training", eval_data_len=eval_train_data_len, eval_indices=eval_train_indices)
+    prev_eval_avg = evaluate_model(eval_type="training", eval_data_len=eval_train_data_len, eval_indices=eval_train_indices)
 
 if eval_test:
-    evaluate_model(eval_type="testing", eval_data_len=eval_test_data_len, eval_indices=eval_test_indices)
+    prev_eval_avg = evaluate_model(eval_type="testing", eval_data_len=eval_test_data_len, eval_indices=eval_test_indices)
     
 # If train_selected_indices is not empty, we will use the selected indices for training
 if train_selected_indices:
@@ -725,6 +785,9 @@ def evaluate_iteration_model(eval_type, iteration, eval_data_len, eval_indices):
 
     weighted_reward = np.mean(filter_reward_list) / 5 if filter_reward_list else None
     logging.info(f"EVAL: Trained model weighted average rewards on {eval_type} set for iteration {iteration}: {weighted_reward}")
+    
+    prev_eval_avg = weighted_reward 
+    return prev_eval_avg
 
 # Training loop
 for iteration in tqdm(range(num_iterations), desc="Training Iterations", disable=True):
@@ -759,7 +822,8 @@ for iteration in tqdm(range(num_iterations), desc="Training Iterations", disable
         max_target_length=max_target_length,
         per_device_train_batch_size=per_device_train_batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
-        seed=seed
+        seed=seed,
+        prev_eval_avg=prev_eval_avg
     )
 
     logging.info(f"Chosen rewards for iteration {iteration}: {chosen_rewards}")
@@ -769,9 +833,9 @@ for iteration in tqdm(range(num_iterations), desc="Training Iterations", disable
     # Evaluate model every eval_frequency iterations
     if (iteration + 1) % eval_frequency == 0:
         if eval_train:
-            evaluate_iteration_model(eval_type="training", iteration=iteration, eval_data_len=eval_train_data_len, eval_indices=eval_train_indices)
+            prev_eval_avg = evaluate_iteration_model(eval_type="training", iteration=iteration, eval_data_len=eval_train_data_len, eval_indices=eval_train_indices)
         if eval_test:
-            evaluate_iteration_model(eval_type="testing", iteration=iteration, eval_data_len=eval_test_data_len, eval_indices=eval_test_indices)
+            prev_eval_avg = evaluate_iteration_model(eval_type="testing", iteration=iteration, eval_data_len=eval_test_data_len, eval_indices=eval_test_indices)
 
     logging.info(f"-----------Finished iteration {iteration}-----------")
 

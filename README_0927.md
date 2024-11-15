@@ -9,12 +9,22 @@ related files:
 ### Current status
 CLAPS: input 
 
-### Some actions
+### Notification
 Don't save the model output
 ```
 (trl) (base) b0990106x@whhwh4ctr1728964608578-hh54w:/work/b0990106x/trl$ du -sh model_output/
 666G    model_output/
 ```
+
+### Pre-Task
+```
+sudo apt-get update && sudo apt-get install tmux
+```
+```
+pip install nbconvert
+jupyter nbconvert --to script <name>.ipynb
+```
+
 ### Modify IO part
 1. avoid loading checkpoint repeatedly
 2. avoid saving model output
