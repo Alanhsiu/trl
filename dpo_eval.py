@@ -13,6 +13,13 @@ import json
 from typing import List, Tuple
 import argparse
 import random
+import string
+from jiwer import wer
+import soundfile as sf
+from faster_whisper import WhisperModel
+model_size = "tiny"
+
+
 
 sys.path.append('/work/b0990106x/trl/CLAPS')
 from CLAPS.inference import infer
@@ -93,6 +100,29 @@ def convert_array_to_tensor_format(audio_array):
 #         # return None
 #         return 0
 
+def reward_wer(reference, hypothesis):
+    raw_wer = wer(reference, hypothesis)
+    normalized = min(raw_wer, 1.0)
+    return 1 - normalized
+
+def get_reward_asr(file_path, asr_model):
+    # model = WhisperModel(model_size, device="cuda", compute_type="float16")
+    # model = WhisperModel(model_size, device="cpu", compute_type="int8")
+
+    print("file_path: ", file_path)
+    segments, info = asr_model.transcribe(file_path, beam_size=3)
+    # print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
+
+    segments = list(segments)
+    modified_text = ''.join(char for char in segments[0].text if char not in string.punctuation).lower().strip()
+    print("file_path: ", file_path," modified_text: ", modified_text)
+    ground_truth = "neighboring fields"
+    reward = reward_wer(ground_truth, modified_text)
+    print(f"Reward: {reward:.2f}")
+    
+    return reward
+
+
 def get_reward_mos(file_path, utmos_model):
     return utmos_model.predict(input_path=file_path, verbose=False)
 
@@ -169,6 +199,11 @@ def get_reward_even_token(token_list):
     percent = even_count/len(token_list)
     total = even_count
     return reward, percent, total
+
+def process_and_get_asr_reward(model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, asr_model, episode_counter=0, temperature = 1.0):
+    _, _, output_path_ckpt = get_ar_prediction_v3(args_predict, model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature = temperature)
+    reward = get_reward_asr(file_path=output_path_ckpt, asr_model=asr_model)
+    return reward
 
 def process_and_get_mos_reward(model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, utmos_model, episode_counter=0, temperature = 1.0):
     _, _, output_path_ckpt = get_ar_prediction_v3(args_predict, model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature = temperature)
@@ -404,6 +439,71 @@ def eval_dpo_token_length(
 #     # trained_model_metrics = calculate_metrics(filtered_trained_model_rewards)
 
 #     # return trained_model_metrics, trained_model_rewards, trained_model_even_percent, trained_model_even_total
+
+def eval_dpo_asr(
+    nar_model,
+    ar_tokenizer,
+    nar_tokenizer,
+    trained_model,
+    asr_model,
+    args_predict,
+    all_src_encodec,
+    all_instruction,
+    iteration,
+    num_evaluations = 10,
+    eval_data_len=1000,
+    selected_indices=None,  # Add this parameter
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+):
+    trained_model.to(device)
+    all_data_metrics = []
+    all_rewards = []
+
+    data_indices = selected_indices if selected_indices is not None else range(len(all_instruction))
+    data_len = len(data_indices)
+    target_rewards = min(eval_data_len, data_len)
+
+    count_rewards = 0
+    i = 0
+
+    while count_rewards < target_rewards:
+        if i >= data_len:
+            print("Exceeded initial data length.")
+            break
+        
+        idx = data_indices[i]
+        instruction = all_instruction[idx]
+        src_encodec = all_src_encodec[idx]
+        size_of_packed_input = (len(src_encodec[0]) + len(ar_tokenizer(instruction)["input_ids"][1:-1]) + 3)
+        
+        if size_of_packed_input <= 1024 and size_of_packed_input > 4:
+            rewards = []
+
+            for j in range(num_evaluations):
+                trained_model_reward = process_and_get_asr_reward(trained_model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, asr_model, episode_counter=f"eval_{iteration}_data_{idx}_{j}")
+                rewards.append(trained_model_reward)
+
+            filtered_trained_model_rewards = [r for r in rewards if r is not None]
+            if filtered_trained_model_rewards != []:
+                trained_model_metrics = calculate_metrics(filtered_trained_model_rewards)
+                all_data_metrics.append({
+                    "idx": idx,
+                    "metrics": trained_model_metrics
+                })
+                all_rewards.append(rewards)
+                count_rewards += 1
+            else: 
+                all_data_metrics.append({
+                    "idx": idx,
+                    "metrics": None
+                })
+                all_rewards.append(None)
+        else:
+            print(f"Skipping data point {idx} due to insufficient packed input size.")
+        i += 1
+    
+    return all_data_metrics, all_rewards
+    
 
 def eval_dpo_mos(
             # ar_checkpoint, # checkpoint for the AR model
