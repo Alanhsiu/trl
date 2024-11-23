@@ -107,18 +107,19 @@ def reward_wer(reference, hypothesis):
     normalized = min(raw_wer, 1.0)
     return 1 - normalized
 
-def get_reward_asr(file_path, asr_model):
-    segments, _ = asr_model.transcribe(file_path, beam_size=3)
+def get_reward_asr(file_path, asr_model, ground_truth):
+    # return 1
+    segments, _ = asr_model.transcribe(file_path, beam_size=5, language="en")
     segments = list(segments)
     if not segments:
         print(f"file_path: {file_path}")
         print(f"ASR model returned no segments for file: {file_path}")
         return 0
     modified_text = ''.join(char for char in segments[0].text if char not in string.punctuation).lower().strip()
-    ground_truth = "neighboring fields"
     reward = reward_wer(ground_truth, modified_text)
-    print(f"modified_text: {modified_text}, reward: {reward:.2f}")
+    print(f"modified_text: {modified_text}, reward: {reward:.2f}, file_path: {file_path}")
     return reward
+
 
 def get_reward_mos(file_path, utmos_model):
     return utmos_model.predict(input_path=file_path, verbose=False)
@@ -723,6 +724,7 @@ def process_and_get_claps_asr_rewards_batch(
         args_predict,
         clap_model,
         asr_model,
+        ground_truth_list,
         accelerator,
         episode_counter=0,
         temperature=1.0
@@ -733,6 +735,7 @@ def process_and_get_claps_asr_rewards_batch(
     )
 
     reward_list = []
+    asr_reward_list = []
     for i, audio in enumerate(audio_list):
         if audio is not None:
             tensor_audio = convert_array_to_tensor_format(audio)
@@ -744,19 +747,25 @@ def process_and_get_claps_asr_rewards_batch(
             )
 
             # Save the audio for ASR evaluation
-            temp_dir_path = Path("/dev/shm/temp_audio_files")
-            temp_dir_path.mkdir(parents=True, exist_ok=True)
-            output_path_ckpt = temp_dir_path / f"generate_{episode_counter}_item_{i}.wav"
+            # temp_dir_path = Path("/dev/shm/temp_audio_files")
+            # temp_dir_path.mkdir(parents=True, exist_ok=True)
+            # output_path_ckpt = temp_dir_path / f"generate_{episode_counter}_item_{i}.wav"
+            output_path_ckpt = args_predict.output_path.replace(".wav", f"_generate_{episode_counter}_item_{i}.wav")
             sf.write(output_path_ckpt, np.ravel(audio), samplerate=24000)
-
-            asr_reward = get_reward_asr(file_path=output_path_ckpt, asr_model=asr_model)
-            shutil.rmtree(temp_dir_path)  # Clean up temporary files
+            asr_reward = get_reward_asr(file_path=output_path_ckpt, asr_model=asr_model, ground_truth=ground_truth_list[i])
+            # only keep the file when i is 0
+            if i != 0:
+                os.remove(output_path_ckpt)
+            # shutil.rmtree(temp_dir_path)  # Clean up temporary files
 
             final_reward = clap_reward * asr_reward
-            print(f"Claps reward: {clap_reward:.2f}, ASR reward: {asr_reward:.2f}, Final reward: {final_reward:.2f}")
+            # print(f"Claps reward: {clap_reward:.2f}, ASR reward: {asr_reward:.2f}, Final reward: {final_reward:.2f}")
         else:
             final_reward = 0
         reward_list.append(final_reward)
+        asr_reward_list.append(asr_reward)
+
+    print(f"average asr reward: {np.mean(asr_reward_list):.2f}")
 
     return reward_list
 
@@ -769,6 +778,7 @@ def eval_dpo_claps_asr_batch(
         args_predict,
         all_src_encodec,
         all_instruction,
+        all_ground_truth,
         iteration,
         clap_model,
         asr_model,
@@ -796,18 +806,22 @@ def eval_dpo_claps_asr_batch(
         idx = data_indices[i]
         instruction = all_instruction[idx]
         src_encodec = all_src_encodec[idx]
+        ground_truth = all_ground_truth[idx]
         size_of_packed_input = (
             len(src_encodec[0]) + len(ar_tokenizer(instruction)["input_ids"][1:-1]) + 3
         )
 
         batch_src_encodec = [src_encodec] * num_evaluations
         batch_instruction = [instruction] * num_evaluations
-
+        batch_ground_truth = [ground_truth] * num_evaluations
+        
         if size_of_packed_input <= 1024 and size_of_packed_input > 4:
             rewards = process_and_get_claps_asr_rewards_batch(
                 trained_model, nar_model, ar_tokenizer, nar_tokenizer,
                 batch_src_encodec, batch_instruction, args_predict,
-                clap_model=clap_model, asr_model=asr_model, accelerator=accelerator,
+                clap_model=clap_model, asr_model=asr_model,
+                ground_truth_list=batch_ground_truth,
+                accelerator=accelerator,
                 episode_counter=f"eval_{iteration}_data_{idx}"
             )
             filtered_trained_model_rewards = [r for r in rewards if r is not None]

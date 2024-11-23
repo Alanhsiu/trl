@@ -1,7 +1,11 @@
 ### Entry point
 * `dpo_claps.ipynb` (base) -> backup on 11/1
 * `dpo_claps_optimized_io.ipynb` (optimized IO version) -> rename to `dpo_claps.ipynb` on 11/1
-* `dpo_claps_mos` (Claps + MOS version)
+* `dpo_claps_mos`
+* `dpo_mos_nisqa` 
+* `dpo_mos_ut` 
+* `dpo_asr` 
+* `dpo_claps_asr`
 
 related files:
 `dpo_eval.py`, `vc/`
@@ -15,6 +19,11 @@ Don't save the model output
 (trl) (base) b0990106x@whhwh4ctr1728964608578-hh54w:/work/b0990106x/trl$ du -sh model_output/
 666G    model_output/
 ```
+
+### Data Source
+[soxdata_encodec](https://huggingface.co/datasets/lca0503/soxdata_encodec/viewer/default/test)
+Evaluation: eval_train_indices: [8, 16, 65, 100, 102]
+Evaluation: eval_test_indices: [105, 112, 132, 140, 184]
 
 ### Pre-Task
 ```
