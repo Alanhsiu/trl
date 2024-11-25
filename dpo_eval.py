@@ -198,10 +198,10 @@ def get_reward_even_token(token_list):
     total = even_count
     return reward, percent, total
 
-def process_and_get_asr_reward(model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, asr_model, episode_counter=0, temperature = 1.0):
-    _, _, output_path_ckpt = get_ar_prediction_v3(args_predict, model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature = temperature)
-    reward = get_reward_asr(file_path=output_path_ckpt, asr_model=asr_model)
-    return reward
+# def process_and_get_asr_reward(model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, asr_model, episode_counter=0, temperature = 1.0):
+#     _, _, output_path_ckpt = get_ar_prediction_v3(args_predict, model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature = temperature)
+#     reward = get_reward_asr(file_path=output_path_ckpt, asr_model=asr_model)
+#     return reward
 
 def process_and_get_mos_reward(model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, utmos_model, episode_counter=0, temperature = 1.0):
     _, _, output_path_ckpt = get_ar_prediction_v3(args_predict, model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, episode_counter, temperature = temperature)
@@ -754,20 +754,22 @@ def process_and_get_claps_asr_rewards_batch(
             sf.write(output_path_ckpt, np.ravel(audio), samplerate=24000)
             asr_reward = get_reward_asr(file_path=output_path_ckpt, asr_model=asr_model, ground_truth=ground_truth_list[i])
             # only keep the file when i is 0
-            if i != 0:
-                os.remove(output_path_ckpt)
+            # if i != 0:
+            #     os.remove(output_path_ckpt)
             # shutil.rmtree(temp_dir_path)  # Clean up temporary files
 
-            final_reward = clap_reward * asr_reward
+            # final_reward = clap_reward * asr_reward
+            final_reward = clap_reward*0.9 + asr_reward*0.1
             # print(f"Claps reward: {clap_reward:.2f}, ASR reward: {asr_reward:.2f}, Final reward: {final_reward:.2f}")
         else:
             final_reward = 0
         reward_list.append(final_reward)
         asr_reward_list.append(asr_reward)
 
-    print(f"average asr reward: {np.mean(asr_reward_list):.2f}")
+    average_asr_reward = np.mean(asr_reward_list)
+    print(f"average asr reward: {average_asr_reward:.2f}")
 
-    return reward_list
+    return reward_list, asr_reward_list
 
 
 def eval_dpo_claps_asr_batch(
@@ -791,6 +793,7 @@ def eval_dpo_claps_asr_batch(
     trained_model.to(device)
     all_data_metrics = []
     all_rewards = []
+    all_asr_rewards = []
 
     data_indices = selected_indices if selected_indices is not None else range(len(all_instruction))
     data_len = len(data_indices)
@@ -816,7 +819,7 @@ def eval_dpo_claps_asr_batch(
         batch_ground_truth = [ground_truth] * num_evaluations
         
         if size_of_packed_input <= 1024 and size_of_packed_input > 4:
-            rewards = process_and_get_claps_asr_rewards_batch(
+            rewards, asr_rewards = process_and_get_claps_asr_rewards_batch(
                 trained_model, nar_model, ar_tokenizer, nar_tokenizer,
                 batch_src_encodec, batch_instruction, args_predict,
                 clap_model=clap_model, asr_model=asr_model,
@@ -829,12 +832,14 @@ def eval_dpo_claps_asr_batch(
                 trained_model_metrics = calculate_metrics(filtered_trained_model_rewards)
                 all_data_metrics.append({"idx": idx, "metrics": trained_model_metrics})
                 all_rewards.append(rewards)
+                all_asr_rewards.append(asr_rewards)
                 count_rewards += 1
             else:
                 all_data_metrics.append({"idx": idx, "metrics": None})
                 all_rewards.append(None)
+                all_asr_rewards.append(None)
         else:
             print(f"Skipping data point {idx} due to insufficient packed input size.")
         i += 1
 
-    return all_data_metrics, all_rewards
+    return all_data_metrics, all_rewards, all_asr_rewards
