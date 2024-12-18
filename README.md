@@ -49,3 +49,13 @@ jupyter nbconvert --to script <name>.ipynb
 ### Notes
 1. use another mos reward 
 2. ut mos reward
+
+### toolkits version
+```
+(dpo) b09901066@eda39 ~/trl $ pip install faster-whisper==0.5.0
+```
+
+### Tensorboard
+```
+tensorboard --logdir="model_output/1210-2215/tensorboard_logs"
+```

@@ -160,3 +160,7 @@ vc/
 results/
 model_output/
 CLAPS/
+backup/
+zip/
+dataset/
+dpo_data_old/

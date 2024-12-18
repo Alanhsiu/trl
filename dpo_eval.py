@@ -735,13 +735,14 @@ def process_and_get_claps_asr_rewards_batch(
     )
 
     reward_list = []
+    claps_reward_list = []
     asr_reward_list = []
     for i, audio in enumerate(audio_list):
         if audio is not None:
             tensor_audio = convert_array_to_tensor_format(audio)
             if tensor_audio[0].shape[0] == 1:
                 tensor_audio[0] = tensor_audio[0].squeeze(0)
-            clap_reward = get_reward_claps(
+            claps_reward = get_reward_claps(
                 clap_model=clap_model, accelerator=accelerator,
                 prompts=instruction[i], wavs=tensor_audio
             )
@@ -759,18 +760,20 @@ def process_and_get_claps_asr_rewards_batch(
             # shutil.rmtree(temp_dir_path)  # Clean up temporary files
 
             # final_reward = clap_reward * asr_reward
-            final_reward = clap_reward*0.9 + asr_reward*0.1
+            final_reward = claps_reward*0.9 + asr_reward*0.1
             # print(f"Claps reward: {clap_reward:.2f}, ASR reward: {asr_reward:.2f}, Final reward: {final_reward:.2f}")
         else:
             final_reward = 0
         reward_list.append(final_reward)
+        claps_reward_list.append(claps_reward)
         asr_reward_list.append(asr_reward)
 
+    average_claps_reward = np.mean(claps_reward_list)
     average_asr_reward = np.mean(asr_reward_list)
+    print(f"average claps reward: {average_claps_reward:.2f}")
     print(f"average asr reward: {average_asr_reward:.2f}")
 
-    return reward_list, asr_reward_list
-
+    return reward_list, claps_reward_list, asr_reward_list
 
 def eval_dpo_claps_asr_batch(
         nar_model,
@@ -793,6 +796,7 @@ def eval_dpo_claps_asr_batch(
     trained_model.to(device)
     all_data_metrics = []
     all_rewards = []
+    all_claps_rewards = []
     all_asr_rewards = []
 
     data_indices = selected_indices if selected_indices is not None else range(len(all_instruction))
@@ -819,7 +823,7 @@ def eval_dpo_claps_asr_batch(
         batch_ground_truth = [ground_truth] * num_evaluations
         
         if size_of_packed_input <= 1024 and size_of_packed_input > 4:
-            rewards, asr_rewards = process_and_get_claps_asr_rewards_batch(
+            rewards, claps_rewards, asr_rewards = process_and_get_claps_asr_rewards_batch(
                 trained_model, nar_model, ar_tokenizer, nar_tokenizer,
                 batch_src_encodec, batch_instruction, args_predict,
                 clap_model=clap_model, asr_model=asr_model,
@@ -832,14 +836,16 @@ def eval_dpo_claps_asr_batch(
                 trained_model_metrics = calculate_metrics(filtered_trained_model_rewards)
                 all_data_metrics.append({"idx": idx, "metrics": trained_model_metrics})
                 all_rewards.append(rewards)
+                all_claps_rewards.append(claps_rewards)
                 all_asr_rewards.append(asr_rewards)
                 count_rewards += 1
             else:
                 all_data_metrics.append({"idx": idx, "metrics": None})
                 all_rewards.append(None)
+                all_claps_rewards.append(None)
                 all_asr_rewards.append(None)
         else:
             print(f"Skipping data point {idx} due to insufficient packed input size.")
         i += 1
 
-    return all_data_metrics, all_rewards, all_asr_rewards
+    return all_data_metrics, all_rewards, all_claps_rewards, all_asr_rewards
