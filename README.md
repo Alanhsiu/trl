@@ -1,61 +1,27 @@
 ### Entry point
-* `dpo_claps.ipynb` (base) -> backup on 11/1
-* `dpo_claps_optimized_io.ipynb` (optimized IO version) -> rename to `dpo_claps.ipynb` on 11/1
-* `dpo_claps_mos`
-* `dpo_mos_nisqa` 
-* `dpo_mos_ut` 
-* `dpo_asr` 
-* `dpo_claps_asr`
+* `dpo_claps_asr.ipynb`
 
-related files:
-`dpo_eval.py`, `vc/`
-
-### Current status
-CLAPS: input 
-
-### Notification
-Don't save the model output
-```
-(trl) (base) b0990106x@whhwh4ctr1728964608578-hh54w:/work/b0990106x/trl$ du -sh model_output/
-666G    model_output/
-```
+* related files: `dpo_eval.py`, `vc/`, `CLAPS/`
 
 ### Data Source
 [soxdata_encodec](https://huggingface.co/datasets/lca0503/soxdata_encodec/viewer/default/test)
-Evaluation: eval_train_indices: [8, 16, 65, 100, 102]
-Evaluation: eval_test_indices: [105, 112, 132, 140, 184]
 
-### Pre-Task
+### Use TMUX to run the script in the background
 ```
 sudo apt-get update && sudo apt-get install tmux
-```
-```
 pip install nbconvert
-jupyter nbconvert --to script <name>.ipynb
+jupyter nbconvert --to script dpo_claps_asr.ipynb.ipynb
 ```
+(alternatively, in VSCode, press `ctrl` + `shift` + `p` and click `Jupyter: Export to Python Script`)
 
-### Modify IO part
-1. avoid loading checkpoint repeatedly
-2. avoid saving model output
+### Use plot.ipynb to plot the result
+* be sure to modify the  `model_output_dir`
+(it is ok to use tensorboard to visualize the result, however, the plot.ipynb is more flexible and better for report)
 
-### Plot
-1. std error
-2. max and min
+### Note
+* Reward function is of the form `reward = k*(CLAPS_reward) + (1-k)*(ASR_reward)`, where `k` is a hyperparameter.
 
-### Exp Todos
-1. CLaps: train / test set difference (5 fixed / 5 fixed), eval freq = 5
-2. CLaps+MOS: train / test set difference (5 fixed / 5 fixed), eval freq = 5
-
-### Notes
-1. use another mos reward 
-2. ut mos reward
-
-### toolkits version
-```
-(dpo) b09901066@eda39 ~/trl $ pip install faster-whisper==0.5.0
-```
-
-### Tensorboard
+### Tensorboard Usage
 ```
 tensorboard --logdir="model_output/1210-2215/tensorboard_logs"
 ```
