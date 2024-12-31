@@ -435,69 +435,69 @@ def eval_dpo_token_length(
 
 #     # return trained_model_metrics, trained_model_rewards, trained_model_even_percent, trained_model_even_total
 
-def eval_dpo_asr(
-    nar_model,
-    ar_tokenizer,
-    nar_tokenizer,
-    trained_model,
-    asr_model,
-    args_predict,
-    all_src_encodec,
-    all_instruction,
-    iteration,
-    num_evaluations = 10,
-    eval_data_len=1000,
-    selected_indices=None,  # Add this parameter
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-):
-    trained_model.to(device)
-    all_data_metrics = []
-    all_rewards = []
+# def eval_dpo_asr(
+#     nar_model,
+#     ar_tokenizer,
+#     nar_tokenizer,
+#     trained_model,
+#     asr_model,
+#     args_predict,
+#     all_src_encodec,
+#     all_instruction,
+#     iteration,
+#     num_evaluations = 10,
+#     eval_data_len=1000,
+#     selected_indices=None,  # Add this parameter
+#     device = "cuda" if torch.cuda.is_available() else "cpu"
+# ):
+#     trained_model.to(device)
+#     all_data_metrics = []
+#     all_rewards = []
 
-    data_indices = selected_indices if selected_indices is not None else range(len(all_instruction))
-    data_len = len(data_indices)
-    target_rewards = min(eval_data_len, data_len)
+#     data_indices = selected_indices if selected_indices is not None else range(len(all_instruction))
+#     data_len = len(data_indices)
+#     target_rewards = min(eval_data_len, data_len)
 
-    count_rewards = 0
-    i = 0
+#     count_rewards = 0
+#     i = 0
 
-    while count_rewards < target_rewards:
-        if i >= data_len:
-            print("Exceeded initial data length.")
-            break
+#     while count_rewards < target_rewards:
+#         if i >= data_len:
+#             print("Exceeded initial data length.")
+#             break
         
-        idx = data_indices[i]
-        instruction = all_instruction[idx]
-        src_encodec = all_src_encodec[idx]
-        size_of_packed_input = (len(src_encodec[0]) + len(ar_tokenizer(instruction)["input_ids"][1:-1]) + 3)
+#         idx = data_indices[i]
+#         instruction = all_instruction[idx]
+#         src_encodec = all_src_encodec[idx]
+#         size_of_packed_input = (len(src_encodec[0]) + len(ar_tokenizer(instruction)["input_ids"][1:-1]) + 3)
         
-        if size_of_packed_input <= 1024 and size_of_packed_input > 4:
-            rewards = []
+#         if size_of_packed_input <= 1024 and size_of_packed_input > 4:
+#             rewards = []
 
-            for j in range(num_evaluations):
-                trained_model_reward = process_and_get_asr_reward(trained_model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, asr_model, episode_counter=f"eval_{iteration}_data_{idx}_{j}")
-                rewards.append(trained_model_reward)
+#             for j in range(num_evaluations):
+#                 trained_model_reward = process_and_get_asr_reward(trained_model, nar_model, ar_tokenizer, nar_tokenizer, src_encodec, instruction, args_predict, asr_model, episode_counter=f"eval_{iteration}_data_{idx}_{j}")
+#                 rewards.append(trained_model_reward)
 
-            filtered_trained_model_rewards = [r for r in rewards if r is not None]
-            if filtered_trained_model_rewards != []:
-                trained_model_metrics = calculate_metrics(filtered_trained_model_rewards)
-                all_data_metrics.append({
-                    "idx": idx,
-                    "metrics": trained_model_metrics
-                })
-                all_rewards.append(rewards)
-                count_rewards += 1
-            else: 
-                all_data_metrics.append({
-                    "idx": idx,
-                    "metrics": None
-                })
-                all_rewards.append(None)
-        else:
-            print(f"Skipping data point {idx} due to insufficient packed input size.")
-        i += 1
+#             filtered_trained_model_rewards = [r for r in rewards if r is not None]
+#             if filtered_trained_model_rewards != []:
+#                 trained_model_metrics = calculate_metrics(filtered_trained_model_rewards)
+#                 all_data_metrics.append({
+#                     "idx": idx,
+#                     "metrics": trained_model_metrics
+#                 })
+#                 all_rewards.append(rewards)
+#                 count_rewards += 1
+#             else: 
+#                 all_data_metrics.append({
+#                     "idx": idx,
+#                     "metrics": None
+#                 })
+#                 all_rewards.append(None)
+#         else:
+#             print(f"Skipping data point {idx} due to insufficient packed input size.")
+#         i += 1
     
-    return all_data_metrics, all_rewards
+#     return all_data_metrics, all_rewards
     
 
 def eval_dpo_mos(
@@ -761,6 +761,8 @@ def process_and_get_claps_asr_rewards_batch(
 
             # final_reward = clap_reward * asr_reward
             final_reward = claps_reward*0.9 + asr_reward*0.1
+            # final_reward = claps_reward*0.6 + asr_reward*0.4
+            # final_reward = claps_reward*0.75 + asr_reward*0.25
             # print(f"Claps reward: {clap_reward:.2f}, ASR reward: {asr_reward:.2f}, Final reward: {final_reward:.2f}")
         else:
             final_reward = 0
